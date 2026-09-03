@@ -1,0 +1,5 @@
+pillow
+
+# Best-practice semantic backend. Install these to enable --mode clip.
+torch
+transformers

@@ -1,0 +1,24 @@
+# Secrets and local env
+.env
+.env.*
+!.env.example
+
+# Python/runtime
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# Generated task outputs
+runs_task4*/
+outputs/
+backgrounds/
+intermediates/
+analysis/
+thumbnails/
+*.tmp
+*.log
+
+# Local editor/system files
+.DS_Store
+Thumbs.db

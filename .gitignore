@@ -1,0 +1,70 @@
+# Secrets
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.p12
+*.credentials.json
+*.tokens.json
+.pinterest_oauth_tokens.json
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Generated outputs and reports
+runs*/
+output/
+outputs/
+index/
+tmp/
+*.tmp
+*.log
+*_trend_output/
+*_crawl_output/
+trend_output/
+crawl_output/
+blanket_trend_output/
+blanket_crawl_output/
+.tmp*/
+
+# Task-specific generated folders
+task2_image_benchmark/runs*/
+task2_image_benchmark/tmp/
+task3_image_replace/runs_task3*/
+task4_background_replace/runs_task4*/
+task5_hottrend/*_trend_output/
+task5_hottrend/*_crawl_output/
+task5_hottrend/.pinterest_browser_profile/
+task5_hottrend/.hallmark/
+task6_image_similarity/index/
+task6_image_similarity/output/
+
+# Local caches and large model files
+.cache/
+models/
+*.safetensors
+*.ckpt
+*.pt
+*.pth
+*.onnx
+
+# OS/editor
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/

@@ -1,0 +1,7 @@
+google-genai
+pillow
+numpy
+pandas
+scikit-image
+opencv-python-headless
+python-dotenv
