@@ -8,7 +8,7 @@ from typing import Any
 
 from ..shared.cache import JsonCache
 from ..shared.models import ImageCandidate, VisionResult
-from ..shared.product_policy import infer_product_policy
+from ..shared.product_policy import ProductPolicy, infer_product_policy
 from ..shared.utils import clamp, clamp01, env, fingerprint, truncate_text
 
 
@@ -27,6 +27,8 @@ class ProductVisionFilter:
         refresh_cache: bool = False,
         mode: str = "auto",
         product_focus: str = "auto",
+        product_policy: ProductPolicy | None = None,
+        crawl_purpose: str = "product",
     ):
         self.niche = niche
         self.model = model
@@ -35,7 +37,8 @@ class ProductVisionFilter:
         self.cache = cache
         self.refresh_cache = refresh_cache
         self.mode = mode
-        self.product_policy = infer_product_policy(niche, product_focus)
+        self.crawl_purpose = (crawl_purpose or "product").strip().lower().replace("-", "_")
+        self.product_policy = product_policy or infer_product_policy(niche, product_focus)
         self.client = None if mode == "off" else self._build_client()
 
     def _build_client(self) -> Any:
@@ -69,12 +72,24 @@ class ProductVisionFilter:
             text = re.sub(r"^```(?:json)?", "", text, flags=re.I).strip()
             text = re.sub(r"```$", "", text).strip()
         try:
-            return json.loads(text)
+            parsed = json.loads(text)
         except json.JSONDecodeError:
             match = re.search(r"\{.*\}", text, re.S)
-            if not match:
-                raise
-            return json.loads(match.group(0))
+            if match:
+                parsed = json.loads(match.group(0))
+            else:
+                list_match = re.search(r"\[.*\]", text, re.S)
+                if not list_match:
+                    raise
+                parsed = json.loads(list_match.group(0))
+        if isinstance(parsed, list):
+            return {"results": parsed}
+        if isinstance(parsed, dict):
+            if isinstance(parsed.get("results"), list):
+                return parsed
+            if parsed.get("image_id"):
+                return {"results": [parsed]}
+        raise ValueError("Gemini Vision response must be an object or a list of result objects.")
 
     def _fallback(self, candidate: ImageCandidate, reason: str = "Vision disabled/unavailable.") -> VisionResult:
         return VisionResult(
@@ -110,6 +125,68 @@ class ProductVisionFilter:
             }
             for item in batch
         ]
+        if self.crawl_purpose == "inspiration":
+            return f"""
+You are a strict TREND ARTWORK / VISUAL INSPIRATION gate for a Pinterest crawler.
+
+Target downstream product: {self.product_policy.display_name}
+Trend/niche context: {self.niche}
+
+For every image, decide whether it is a useful visual source for creating a new printable rug/blanket artwork.
+Accept images that have clear motifs, pattern direction, color palette, illustration style, composition, or texture that can transfer to a print product.
+Reject images that are mostly screenshots, memes, text blocks, watermarks, brand logos, celebrity/IP characters, collage boards, blurry thumbnails, room-only photos, or images where the trend idea is not visually inspectable.
+
+Return only JSON:
+{{
+  "results": [
+    {{
+      "image_id": "exact id",
+      "accepted": true,
+      "product_present": true,
+      "product_role": "PRIMARY|SECONDARY|INCIDENTAL|ABSENT|UNCERTAIN",
+      "main_subject": "artwork|pattern|motif|room|text|logo|collage|product|other|unknown",
+      "target_product_type": "printable_inspiration|pattern|artwork|motif|texture|not_usable|unknown",
+      "is_single_product": false,
+      "is_physical_product": false,
+      "is_floor_textile": false,
+      "is_collage": false,
+      "is_doormat": false,
+      "is_bath_mat": false,
+      "is_wall_tapestry": false,
+      "motifs": ["short visual motif"],
+      "source_role": "artwork_source|style_reference|product_reference|extraction_required|reject",
+      "is_lifestyle_scene": false,
+      "foreground_coverage": 0.9,
+      "background_complexity": 0.1,
+      "flat_artwork_score": 0.9,
+      "printability_score": 0.9,
+      "requires_extraction": false,
+      "reject_reason_code": "",
+      "product_confidence": 0.95,
+      "product_visibility": 85,
+      "trend_relevance": 80,
+      "commercial_quality": 75,
+      "aesthetic": "short printable style and palette",
+      "detected_product": "usable visual source description",
+      "reason": "visible evidence only",
+      "confidence": 0.95
+    }}
+  ]
+}}
+
+For inspiration mode:
+- product_present means a usable visual inspiration is present.
+- product_role PRIMARY means the usable motif/artwork/pattern is the main subject.
+- product_visibility means motif/artwork clarity.
+- commercial_quality means print/ecommerce suitability.
+- Use reject_reason_code for strong rejections such as REJECT_TEXT_BLOCK, REJECT_LOGO, REJECT_WATERMARK, REJECT_IP_CHARACTER, REJECT_BLURRY, REJECT_ROOM_ONLY, REJECT_COLLAGE.
+- source_role is the downstream contract: artwork_source can be printed directly; style_reference is only for palette/style extraction; product_reference is an existing product; extraction_required needs foreground separation; reject is unusable.
+- A lifestyle scene with a clear motif is not artwork_source unless the image is already flat/isolated. Use extraction_required or style_reference instead.
+
+Image metadata:
+{json.dumps(payload, ensure_ascii=False, indent=2)}
+""".strip()
+
         niche_rules = f"""
 Product policy:
 - Target product names/keywords: {self.product_policy.target_hint()}.
@@ -218,6 +295,22 @@ Image metadata:
             motifs = item.get("motifs")
             if not isinstance(motifs, list):
                 motifs = []
+            source_role = truncate_text(item.get("source_role"), 40).lower()
+            is_lifestyle_scene = bool(item.get("is_lifestyle_scene"))
+            foreground_coverage = clamp(item.get("foreground_coverage"), 0.0, 1.0)
+            background_complexity = clamp(item.get("background_complexity"), 0.0, 1.0)
+            flat_artwork_score = clamp(item.get("flat_artwork_score"), 0.0, 1.0)
+            printability_score = clamp(item.get("printability_score"), 0.0, 1.0)
+            requires_extraction = bool(item.get("requires_extraction"))
+            if not source_role:
+                if requires_extraction:
+                    source_role = "extraction_required"
+                elif is_lifestyle_scene or background_complexity >= 0.65:
+                    source_role = "style_reference"
+                elif flat_artwork_score >= 0.75 and foreground_coverage >= 0.55:
+                    source_role = "artwork_source"
+                else:
+                    source_role = "unknown"
             output[image_id] = VisionResult(
                 image_id=image_id,
                 accepted=accepted,
@@ -242,6 +335,13 @@ Image metadata:
                 is_wall_tapestry=bool(item.get("is_wall_tapestry")),
                 motifs=[truncate_text(value, 60).lower() for value in motifs if str(value).strip()],
                 reject_reason_code=truncate_text(item.get("reject_reason_code"), 120).upper(),
+                source_role=source_role,
+                is_lifestyle_scene=is_lifestyle_scene,
+                foreground_coverage=foreground_coverage,
+                background_complexity=background_complexity,
+                flat_artwork_score=flat_artwork_score,
+                printability_score=printability_score,
+                requires_extraction=requires_extraction,
             )
         return output
 
@@ -256,6 +356,7 @@ Image metadata:
                     "kind": "product-vision-v3-structured",
                     "niche": self.niche,
                     "product_policy": self.product_policy.policy_id,
+                    "crawl_purpose": self.crawl_purpose,
                     "model": self.model,
                     "image_id": candidate.image_id,
                     "dhash": candidate.dhash,

@@ -249,6 +249,8 @@ class PinterestBrowserProvider(DiscoveryProvider):
             args=[
                 "--disable-blink-features=AutomationControlled",
                 "--disable-dev-shm-usage",
+                "--disable-quic",
+                "--disable-http3",
             ],
         )
         return self._context
@@ -450,130 +452,6 @@ class PinterestSearchPageProvider(DiscoveryProvider):
         return output
 
 
-class BingImagesPinterestProvider(DiscoveryProvider):
-    name = "bing_images_pinterest"
-
-    def __init__(self, timeout: int = 30):
-        self.timeout = timeout
-        self.session = requests.Session()
-        retry = Retry(
-            total=3,
-            connect=3,
-            read=3,
-            status=3,
-            backoff_factor=0.8,
-            status_forcelist=(408, 429, 500, 502, 503, 504),
-            allowed_methods=frozenset({"GET"}),
-            raise_on_status=False,
-        )
-        adapter = HTTPAdapter(max_retries=retry)
-        self.session.mount("https://", adapter)
-        self.session.mount("http://", adapter)
-        self.session.headers.update(
-            {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/126.0.0.0 Safari/537.36"
-                ),
-                "Accept-Language": "en-US,en;q=0.9",
-            }
-        )
-
-    @staticmethod
-    def _decode_js_string(value: str) -> str:
-        try:
-            return bytes(value, "utf-8").decode("unicode_escape")
-        except Exception:
-            return value
-
-    def _extract_values(self, text: str, key: str) -> list[str]:
-        values: list[str] = []
-        text = html.unescape(text)
-        marker = f'"{key}":"'
-        for part in text.split(marker)[1:]:
-            raw = part.split('"', 1)[0]
-            value = self._decode_js_string(raw)
-            if value:
-                values.append(value)
-        return values
-
-    def _search_once(
-        self,
-        *,
-        search_query: str,
-        query: str,
-        trend: TrendPackageItem,
-        limit: int,
-        seen: set[str],
-    ) -> list[SearchResult]:
-        url = f"https://www.bing.com/images/search?q={quote_plus(search_query)}"
-        response = self.session.get(url, timeout=self.timeout)
-        if not 200 <= response.status_code < 300:
-            raise RuntimeError(f"Bing Images HTTP {response.status_code}")
-
-        image_urls = self._extract_values(response.text, "murl")
-        page_urls = self._extract_values(response.text, "purl")
-        output: list[SearchResult] = []
-        for index, image_url in enumerate(image_urls):
-            image_url = normalize_pinimg_url(image_url)
-            if "i.pinimg.com" not in image_url:
-                continue
-            if not re.search(r"\.(jpg|jpeg|png|webp)$", image_url, re.I):
-                continue
-            if image_url in seen:
-                continue
-            seen.add(image_url)
-            pin_url = page_urls[index] if index < len(page_urls) else ""
-            output.append(
-                SearchResult(
-                    result_id=stable_id(self.name, trend.trend_id, query, image_url),
-                    query=query,
-                    trend_id=trend.trend_id,
-                    trend=trend.trend,
-                    image_url=image_url,
-                    pin_url=pin_url if "pinterest." in pin_url else "",
-                    pin_id="",
-                    title="",
-                    source=self.name,
-                    raw={"search_url": url, "search_query": search_query, "index": index},
-                )
-            )
-            if len(output) >= limit:
-                break
-        return output
-
-    def search(
-        self,
-        *,
-        query: str,
-        trend: TrendPackageItem,
-        limit: int,
-        region: str,
-        locale: str,
-    ) -> list[SearchResult]:
-        output: list[SearchResult] = []
-        seen: set[str] = set()
-        search_queries = [
-            f'"{query}" site:pinterest.com/pin',
-            f'"{query}" pinterest',
-            f"{query} pinterest",
-        ]
-        for search_query in search_queries:
-            output.extend(
-                self._search_once(
-                    search_query=search_query,
-                    query=query,
-                    trend=trend,
-                    limit=limit - len(output),
-                    seen=seen,
-                )
-            )
-            if len(output) >= limit:
-                break
-        return output
-
-
 class AutoDiscoveryProvider(DiscoveryProvider):
     name = "auto"
 
@@ -595,6 +473,8 @@ class AutoDiscoveryProvider(DiscoveryProvider):
                 "does not have access",
                 "missing:",
                 "not authorized",
+                "signed out",
+                "run browser login first",
             )
         )
 
@@ -639,35 +519,14 @@ class AutoDiscoveryProvider(DiscoveryProvider):
 
 def provider_from_name(name: str, *, timeout: int = 30, token_path: str = "") -> DiscoveryProvider:
     name = name.lower()
-    if name == "bing-images":
-        return BingImagesPinterestProvider(timeout=timeout)
-    if name == "pinterest-browser":
+    if name in {"auto", "pinterest-browser"}:
         return PinterestBrowserProvider(timeout=timeout)
     if name == "pinterest-web":
-        return PinterestSearchPageProvider(timeout=timeout)
+        raise ValueError("pinterest-web provider is disabled; use pinterest-browser.")
     if name == "pinterest-api":
-        client = PinterestClient(token_path=None if not token_path else __import__("pathlib").Path(token_path), timeout=timeout)
-        return AutoDiscoveryProvider(
-            [
-                PinterestPinSearchProvider(client),
-                PinterestPartnerPinProvider(client),
-            ]
-        )
-    if name == "auto":
-        providers: list[DiscoveryProvider] = []
-        try:
-            client = PinterestClient(token_path=None if not token_path else __import__("pathlib").Path(token_path), timeout=timeout)
-            providers.append(PinterestPinSearchProvider(client))
-            providers.append(PinterestPartnerPinProvider(client))
-        except Exception as exc:
-            LOG.warning("Pinterest API provider unavailable at startup: %s", exc)
-        try:
-            providers.insert(0, PinterestBrowserProvider(timeout=timeout))
-        except Exception as exc:
-            LOG.warning("Pinterest browser provider unavailable at startup: %s", exc)
-        providers.append(BingImagesPinterestProvider(timeout=timeout))
-        providers.append(PinterestSearchPageProvider(timeout=timeout))
-        return AutoDiscoveryProvider(providers)
+        raise ValueError("pinterest-api provider is disabled; use pinterest-browser.")
+    if name == "bing-images":
+        raise ValueError("bing-images provider is disabled; use pinterest-browser.")
     raise ValueError(f"Unknown discovery provider: {name}")
 
 

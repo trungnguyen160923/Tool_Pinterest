@@ -8,7 +8,7 @@ File chính:
 
 - `pinterest_trend_finder.py`: CLI/core orchestration.
 - `pinterest_client.py`: client gọi Pinterest API.
-- `semantic_analyzer.py`: Gemini semantic scoring và query generation.
+- `semantic_analyzer.py`: Gemini semantic scoring; crawl query giữ nguyên keyword từ Pinterest Trends API.
 - `models.py`: dataclass nội bộ cho trend candidates.
 
 ## Tác Dụng
@@ -20,8 +20,8 @@ Biến dữ liệu trend thô thành `trend_package.json` có contract rõ ràng
 1. Gọi các endpoint trend/keyword/topic/shopping/editorial.
 2. Chuẩn hóa tên trend, source, rank, strength.
 3. Dedupe trend theo normalized text.
-4. Chấm semantic fit với niche.
-5. Sinh query crawl có priority.
+4. Chấm visual inspiration fit; không yêu cầu trend phải thuộc đúng product category.
+5. Giữ nguyên keyword Pinterest Trends API làm query crawl.
 6. Xuất package/report.
 
 ## Cấu Hình
@@ -43,4 +43,3 @@ Thông thường chạy wrapper ở task root:
 ```powershell
 python pinterest_trend_finder.py --niche blanket --region US --output blanket_trend_output --max-trends 20 --verbose
 ```
-

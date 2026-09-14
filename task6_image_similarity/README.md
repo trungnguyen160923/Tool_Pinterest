@@ -47,6 +47,43 @@ python task6_image_similarity\image_similarity_tool.py search `
   --rebuild-index
 ```
 
+Augmented query test: crop safe random 20-50px, zoom 110%, rotate left 15 degrees before searching.
+
+```powershell
+python task6_image_similarity\image_similarity_tool.py search `
+  --input task5_hottrend\blanket_crawl_output\downloaded_images\001cee8a1151e8ac.jpg `
+  --gallery task5_hottrend\blanket_crawl_output\downloaded_images `
+  --metadata task5_hottrend\blanket_crawl_output\image_candidates.json `
+  --top-n 10 `
+  --mode classic `
+  --augment-query `
+  --crop-min 20 `
+  --crop-max 50 `
+  --zoom 1.10 `
+  --rotate-left 15 `
+  --save-augmented-input .tmp\augmented_query.jpg `
+  --rebuild-index
+```
+
+If the product touches the image border, safe crop is automatically reduced on that side to avoid cutting the product. By default, the original input image is excluded from results so the top-N list does not return the query itself. Use `--include-input` only when you intentionally want to see self-matches.
+Gemini rerank mode: first find local candidates, then send only the best candidates to Gemini Vision for human-like visual reranking.
+
+```powershell
+python task6_image_similarity\image_similarity_tool.py search `
+  --input task5_hottrend\blanket_crawl_output\downloaded_images\mau.jpg `
+  --gallery task5_hottrend\blanket_crawl_output\downloaded_images `
+  --metadata task5_hottrend\blanket_crawl_output\image_candidates.json `
+  --top-n 10 `
+  --mode classic `
+  --augment-query `
+  --gemini-rerank `
+  --gemini-top-k 30 `
+  --gemini-model gemini-2.5-flash `
+  --rebuild-index
+```
+
+`--gemini-rerank` is optional because it uses paid API calls. `--gemini-top-k 30` means Gemini only reviews the best 30 local candidates, not the entire gallery.
+
 Embedding-first mode:
 
 ```powershell
@@ -119,10 +156,10 @@ When CLIP is unavailable:
 
 ```text
 final_score =
-  45% color similarity
-+ 25% edge/texture similarity
-+ 20% perceptual hash similarity
-+ 10% aspect/layout similarity
+  55% color similarity
++ 30% edge/texture similarity
++ 12% perceptual hash similarity
++  3% aspect/layout similarity
 ```
 
 Classic mode is useful for smoke tests and near-duplicate/image-vibe matching. CLIP mode is the recommended mode for Pinterest-style semantic similarity.

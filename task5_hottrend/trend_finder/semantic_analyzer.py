@@ -22,6 +22,16 @@ RELATIONSHIPS = {
     "IRRELEVANT",
 }
 
+VISUAL_TREND_TERMS = {
+    "art", "artwork", "aesthetic", "botanical", "floral", "flower", "garden",
+    "pattern", "print", "textile", "fabric", "color", "colour", "palette",
+    "geometric", "checkerboard", "checkered", "striped", "plaid", "gingham",
+    "vintage", "retro", "boho", "minimal", "modern", "abstract", "illustration",
+    "halloween", "pumpkin", "christmas", "holiday", "autumn", "fall", "spring",
+    "summer", "winter", "beach", "coastal", "tropical", "celestial", "animal",
+    "fruit", "mushroom", "butterfly", "cottagecore", "farmhouse", "decor",
+}
+
 
 class GeminiSemanticAnalyzer:
     def __init__(
@@ -80,38 +90,26 @@ class GeminiSemanticAnalyzer:
             return json.loads(match.group(0))
 
     def _heuristic_item(self, candidate: TrendCandidate) -> TrendPackageItem:
-        niche_norm = normalize_text(self.niche)
         text_norm = normalize_text(candidate.name)
         home_terms = {
             "home", "decor", "interior", "room", "living", "bedroom", "floor",
             "style", "vintage", "retro", "modern", "boho", "minimal", "pattern",
             "color", "textile", "cozy", "farmhouse", "mid century",
         }
-        direct = niche_norm in text_norm
+        visual = any(term in text_norm for term in VISUAL_TREND_TERMS)
         contextual = any(term in text_norm for term in home_terms)
 
-        if direct:
-            relationship = "DIRECT_PRODUCT"
-            semantic_fit = 88.0
-        elif contextual:
+        if contextual or visual:
             relationship = "DESIGN_INSPIRATION"
-            semantic_fit = 68.0
+            semantic_fit = 72.0 if visual else 68.0
         else:
-            relationship = "IRRELEVANT"
-            semantic_fit = 0.0
+            # Do not reject an unfamiliar category at the keyword stage. The
+            # crawler and image printability gate can judge its actual visuals.
+            relationship = "AUDIENCE_ADJACENT"
+            semantic_fit = 50.0
 
         trend = candidate.name
-        base_queries = [
-            f"{trend} {self.niche}",
-            f"{self.niche} {trend}",
-            f"{trend} {self.niche} ideas",
-            f"{trend} {self.niche} design",
-            self.niche,
-        ]
-        queries = [
-            QuerySpec(query=query, intent="product", priority=index)
-            for index, query in enumerate(unique(base_queries), start=1)
-        ]
+        queries = [QuerySpec(query=trend, intent="trend", priority=1)]
         return TrendPackageItem(
             trend_id="trend_" + candidate.candidate_id[:12],
             trend=trend,
@@ -119,7 +117,7 @@ class GeminiSemanticAnalyzer:
             relationship=relationship,
             semantic_fit=semantic_fit,
             queries=queries[:5],
-            reason="Heuristic fallback based on niche/text overlap and home/design context.",
+            reason="Heuristic fallback; retain the trend for image-level visual and printability review.",
             sources=[candidate.source],
             source_metrics=candidate.metrics,
             tags=[],
@@ -138,21 +136,28 @@ class GeminiSemanticAnalyzer:
             for item in candidates
         ]
         return f"""
-You are the semantic trend intelligence layer for a Pinterest product research tool.
+You are the visual trend intelligence layer for a Pinterest-to-print design tool.
 
-Niche: {self.niche}
+The eventual product format is not a restriction. Any visually rich trend can inspire a rug, blanket, or other textile print.
+Reference context only: {self.niche or "textile print"}
 
 For each Pinterest trend candidate:
-1. Decide whether it is useful for the niche.
+1. Decide whether it has useful visual inspiration value.
 2. Classify relationship as one of:
    DIRECT_PRODUCT, DESIGN_INSPIRATION, CONTEXTUAL_USE, AUDIENCE_ADJACENT, IRRELEVANT.
-3. Score semantic_fit on 0..100.
-4. Produce 3 to 7 search queries that can later be used to find actual product images.
-
+3. Score semantic_fit on 0..100 using this rubric:
+   - visual_relevance: does the trend imply motifs, colors, patterns, textures, or a visual aesthetic?
+   - printability_potential: can those visual elements become a flat, repeatable, or full-bleed print?
+   - design_transferability: can the visual language be reinterpreted into original artwork?
+   Do not score down a trend merely because it comes from beauty, fashion, sports, food styling, or another category.
+   Reject only when the trend is clearly non-visual, text-first, service-oriented, or has no usable visual language.
 Important:
-- Queries should be product-qualified and include the niche unless the trend already contains it.
 - Do not accept random pop culture/person names unless there is a clear visual/product reason.
 - Keep borderline design aesthetics if they can transfer into product style, color, motif, texture, or room context.
+- Seasonal themes are valid when they have clear visual motifs.
+- Beauty, fashion, sports, and lifestyle trends are valid sources of visual inspiration when their imagery can transfer to print.
+- Do not require any product name to appear in the trend keyword.
+- Do not translate, rewrite, or generate search queries. The original Pinterest Trends API keyword is the crawl query.
 
 Return only JSON:
 {{
@@ -163,11 +168,11 @@ Return only JSON:
       "relationship": "DIRECT_PRODUCT|DESIGN_INSPIRATION|CONTEXTUAL_USE|AUDIENCE_ADJACENT|IRRELEVANT",
       "semantic_fit": 86,
       "reject": false,
+      "visual_relevance": 90,
+      "printability_potential": 86,
+      "design_transferability": 86,
       "reason": "short reason",
-      "tags": ["short tags"],
-      "queries": [
-        {{"query": "retro chic rug", "intent": "product", "priority": 1}}
-      ]
+      "tags": ["short tags"]
     }}
   ]
 }}
@@ -198,9 +203,19 @@ Candidates:
         pending: list[TrendCandidate] = []
 
         for candidate in candidates:
+            hard_reject = self._hard_reject_reason(candidate.name)
+            if hard_reject:
+                rejected.append({
+                    "candidate_id": candidate.candidate_id,
+                    "trend": candidate.name,
+                    "reject": True,
+                    "reason": hard_reject,
+                    "filter": "deterministic_non_visual_filter",
+                })
+                continue
             key = fingerprint(
                 {
-                    "kind": "trend-semantic-v1",
+                    "kind": "trend-semantic-v3",
                     "niche": self.niche,
                     "model": self.model,
                     "candidate": {
@@ -255,7 +270,7 @@ Candidates:
                 item, reject = self._item_from_raw(candidate, raw_item)
                 cache_key = fingerprint(
                     {
-                        "kind": "trend-semantic-v1",
+                        "kind": "trend-semantic-v3",
                         "niche": self.niche,
                         "model": self.model,
                         "candidate": {
@@ -290,6 +305,12 @@ Candidates:
             item.trend_id = f"trend_{index:03d}"
         return accepted, rejected
 
+    @staticmethod
+    def _hard_reject_reason(name: str) -> str:
+        # Keyword-level rejection is intentionally disabled. A source category
+        # is not a reliable proxy for the quality of the images it returns.
+        return ""
+
     def _item_from_raw(self, candidate: TrendCandidate, raw: dict[str, Any]) -> tuple[TrendPackageItem, bool]:
         relationship = str(raw.get("relationship") or "IRRELEVANT").strip().upper()
         if relationship not in RELATIONSHIPS:
@@ -297,34 +318,7 @@ Candidates:
         semantic_fit = clamp(raw.get("semantic_fit"), default=0.0)
         reject = bool(raw.get("reject")) or relationship == "IRRELEVANT" or semantic_fit <= 0
 
-        queries: list[QuerySpec] = []
-        for index, query_item in enumerate(raw.get("queries") or [], start=1):
-            if isinstance(query_item, str):
-                query = query_item
-                intent = "product"
-                priority = index
-            elif isinstance(query_item, dict):
-                query = str(query_item.get("query") or "")
-                intent = str(query_item.get("intent") or "product")
-                priority = int(query_item.get("priority") or index)
-            else:
-                continue
-            query = query.strip()
-            if query:
-                queries.append(QuerySpec(query=query, intent=intent, priority=priority))
-
-        if not queries:
-            queries = self._heuristic_item(candidate).queries
-
-        clean_queries = []
-        for index, query in enumerate(queries, start=1):
-            clean_queries.append(
-                QuerySpec(
-                    query=query.query,
-                    intent=query.intent or "product",
-                    priority=query.priority or index,
-                )
-            )
+        queries = [QuerySpec(query=candidate.name, intent="trend", priority=1)]
 
         tags = raw.get("tags") or raw.get("semantic_tags") or []
         if not isinstance(tags, list):
@@ -332,15 +326,14 @@ Candidates:
 
         item = TrendPackageItem(
             trend_id="trend_" + stable_id(candidate.candidate_id, raw.get("trend"), length=8),
-            trend=truncate_text(raw.get("trend") or candidate.name, 180),
+            trend=truncate_text(candidate.name, 180),
             trend_strength=candidate.strength,
             relationship=relationship,
             semantic_fit=semantic_fit,
-            queries=clean_queries[:7],
+            queries=queries,
             reason=truncate_text(raw.get("reason"), 500),
             sources=[candidate.source],
             source_metrics=candidate.metrics,
             tags=unique(tags)[:12],
         )
         return item, reject
-

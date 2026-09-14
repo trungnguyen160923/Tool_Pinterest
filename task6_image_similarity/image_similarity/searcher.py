@@ -20,6 +20,13 @@ def query_features(path: Path, embedder: ClipEmbedder | None = None) -> QueryFea
     return features
 
 
+def path_key(path: str | Path) -> str:
+    try:
+        return str(Path(path).resolve()).lower()
+    except Exception:
+        return str(path).lower()
+
+
 def score_record(query: QueryFeatures, record: ImageRecord) -> tuple[float, dict[str, float | None]]:
     semantic = cosine_similarity(query.embedding, record.embedding)
     color = histogram_intersection(query.color_hist, record.color_hist)
@@ -28,7 +35,7 @@ def score_record(query: QueryFeatures, record: ImageRecord) -> tuple[float, dict
     aspect = aspect_similarity(query.aspect_ratio, record.aspect_ratio)
 
     if semantic is None:
-        score = color * 0.45 + edge * 0.25 + hash_score * 0.20 + aspect * 0.10
+        score = color * 0.55 + edge * 0.30 + hash_score * 0.12 + aspect * 0.03
     else:
         score = semantic * 0.75 + color * 0.10 + edge * 0.07 + hash_score * 0.05 + aspect * 0.03
 
@@ -46,13 +53,17 @@ def search(
     query: QueryFeatures,
     index_payload: dict,
     top_n: int = 10,
+    exclude_paths: list[Path | str] | None = None,
 ) -> list[SimilarityResult]:
     records = [
         item if isinstance(item, ImageRecord) else ImageRecord(**item)
         for item in index_payload.get("records", [])
     ]
+    excluded = {path_key(path) for path in (exclude_paths or [])}
     scored: list[SimilarityResult] = []
     for record in records:
+        if path_key(record.path) in excluded:
+            continue
         score, parts = score_record(query, record)
         scored.append(
             SimilarityResult(

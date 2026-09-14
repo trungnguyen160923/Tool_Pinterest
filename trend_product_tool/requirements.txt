@@ -1,0 +1,15 @@
+pillow>=10.0.0
+requests>=2.31.0
+streamlit>=1.32.0
+
+# Optional for Task6 CLIP mode:
+# torch
+# transformers
+#
+# Optional for AI artwork/background adapters:
+# google-genai
+# pandas
+# numpy
+opencv-python-headless
+# rembg
+# onnxruntime

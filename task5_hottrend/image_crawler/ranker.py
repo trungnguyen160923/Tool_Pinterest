@@ -97,6 +97,27 @@ def score_image(candidate: ImageCandidate, vision: VisionResult) -> float:
     return round(max(0.0, min(100.0, score)), 2)
 
 
+def inspiration_reject_reason(candidate: ImageCandidate, vision: VisionResult, policy: PolicyConfig) -> str:
+    role = str(vision.product_role or "").upper()
+    main_subject = normalized(vision.main_subject)
+    product_type = normalized(vision.target_product_type)
+    if not vision.accepted or not vision.product_present:
+        return vision.reject_reason_code or "REJECT_NOT_PRINTABLE_INSPIRATION"
+    if role not in policy.accepted_roles and role != "UNVERIFIED":
+        return "REJECT_INSPIRATION_ROLE_NOT_ACCEPTED"
+    if vision.product_visibility < policy.min_product_visibility:
+        return "REJECT_LOW_MOTIF_CLARITY"
+    if vision.trend_relevance < policy.min_trend_relevance:
+        return "REJECT_LOW_TREND_RELEVANCE"
+    if vision.is_collage or main_subject == "collage" or product_type == "collage":
+        return "REJECT_COLLAGE"
+    if vision.reject_reason_code:
+        return vision.reject_reason_code
+    if main_subject in {"text", "logo"} or product_type in {"not_usable", "unknown"}:
+        return f"REJECT_MAIN_SUBJECT_{main_subject.upper() or product_type.upper()}"
+    return ""
+
+
 def rank_images(
     *,
     candidates: list[ImageCandidate],
@@ -108,9 +129,11 @@ def rank_images(
     min_trend_relevance: float = 0.0,
     niche: str = "",
     product_focus: str = "auto",
+    product_policy: ProductPolicy | None = None,
+    crawl_purpose: str = "product",
 ) -> tuple[list[RankedImage], list[dict]]:
     accepted_roles = accepted_roles or {"PRIMARY", "SECONDARY", "UNVERIFIED"}
-    product_policy = infer_product_policy(niche, product_focus)
+    product_policy = product_policy or infer_product_policy(niche, product_focus)
     policy = PolicyConfig(
         niche=niche,
         product_focus=product_focus,
@@ -122,13 +145,18 @@ def rank_images(
     )
     ranked: list[RankedImage] = []
     rejected: list[dict] = []
+    inspiration_mode = (crawl_purpose or "product").strip().lower().replace("-", "_") == "inspiration"
     for candidate in candidates:
         vision = vision_results.get(candidate.image_id)
         if vision is None:
             rejected.append({"image_id": candidate.image_id, "reason": "missing_vision_result"})
             continue
         score = score_image(candidate, vision)
-        reject_reason = policy_reject_reason(candidate, vision, policy)
+        reject_reason = (
+            inspiration_reject_reason(candidate, vision, policy)
+            if inspiration_mode
+            else policy_reject_reason(candidate, vision, policy)
+        )
         if not reject_reason and score < min_score:
             reject_reason = "REJECT_LOW_SCORE"
         if reject_reason:
@@ -154,6 +182,7 @@ def rank_images(
                     "is_wall_tapestry": vision.is_wall_tapestry,
                     "motifs": vision.motifs,
                     "detected_product": vision.detected_product,
+                    "source_role": vision.source_role,
                 }
             )
             continue
@@ -185,6 +214,13 @@ def rank_images(
                 main_subject=vision.main_subject,
                 target_product_type=vision.target_product_type,
                 motifs=vision.motifs,
+                source_role=vision.source_role,
+                is_lifestyle_scene=vision.is_lifestyle_scene,
+                foreground_coverage=vision.foreground_coverage,
+                background_complexity=vision.background_complexity,
+                flat_artwork_score=vision.flat_artwork_score,
+                printability_score=vision.printability_score,
+                requires_extraction=vision.requires_extraction,
             )
         )
     ranked.sort(key=lambda item: item.image_score, reverse=True)

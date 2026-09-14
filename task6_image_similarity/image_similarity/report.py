@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import html
 from pathlib import Path
@@ -21,6 +21,10 @@ def result_rows(results: list[SimilarityResult]) -> list[dict[str, Any]]:
                 "edge_score": item.edge_score,
                 "hash_score": item.hash_score,
                 "aspect_score": item.aspect_score,
+                "local_score": metadata.get("local_score", ""),
+                "gemini_score": metadata.get("gemini_score", ""),
+                "gemini_match_level": metadata.get("gemini_match_level", ""),
+                "gemini_reason": metadata.get("gemini_reason", ""),
                 "filename": item.filename,
                 "path": item.path,
                 "width": item.width,
@@ -62,6 +66,10 @@ def export_results(output_dir: Path, *, query: QueryFeatures, results: list[Simi
             "edge_score",
             "hash_score",
             "aspect_score",
+            "local_score",
+            "gemini_score",
+            "gemini_match_level",
+            "gemini_reason",
             "filename",
             "path",
             "width",
@@ -77,6 +85,24 @@ def export_results(output_dir: Path, *, query: QueryFeatures, results: list[Simi
     render_report(output_dir / "similarity_report.html", query=query, results=results, index_payload=index_payload)
 
 
+def gemini_chips(metadata: dict[str, Any]) -> str:
+    score = metadata.get("gemini_score")
+    if score == "" or score is None:
+        return ""
+    local_score = metadata.get("local_score")
+    level = html.escape(str(metadata.get("gemini_match_level") or ""))
+    try:
+        gemini_text = f"{float(score):.1f}"
+    except Exception:
+        gemini_text = html.escape(str(score))
+    try:
+        local_text = f"{float(local_score):.1f}"
+    except Exception:
+        local_text = html.escape(str(local_score or ""))
+    local_chip = f"<span>local {local_text}</span>" if local_text else ""
+    return f"<span>gemini {gemini_text}</span><span>{level}</span>{local_chip}"
+
+
 def render_report(path: Path, *, query: QueryFeatures, results: list[SimilarityResult], index_payload: dict) -> None:
     base = path.parent
     query_src = html.escape(relpath_for_html(Path(query.path), base))
@@ -90,6 +116,7 @@ def render_report(path: Path, *, query: QueryFeatures, results: list[SimilarityR
         product = html.escape(str(metadata.get("detected_product") or metadata.get("target_product_type") or ""))
         pin_url = str(metadata.get("pin_url") or "")
         semantic = "n/a" if item.semantic_score is None else f"{item.semantic_score:.1f}"
+        gemini_reason = html.escape(str(metadata.get("gemini_reason") or ""))
         cards.append(
             f"""
 <article class="card">
@@ -104,8 +131,10 @@ def render_report(path: Path, *, query: QueryFeatures, results: list[SimilarityR
       <span>color {item.color_score:.1f}</span>
       <span>edge {item.edge_score:.1f}</span>
       <span>hash {item.hash_score:.1f}</span>
+      {gemini_chips(metadata)}
     </div>
     <p>{product}</p>
+    {f'<p>{gemini_reason}</p>' if gemini_reason else ''}
     {f'<a href="{html.escape(pin_url)}" target="_blank" rel="noreferrer">Open pin</a>' if pin_url else ''}
   </div>
 </article>
@@ -197,4 +226,3 @@ def render_report(path: Path, *, query: QueryFeatures, results: list[SimilarityR
 """
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(doc, encoding="utf-8")
-

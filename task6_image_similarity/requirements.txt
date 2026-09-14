@@ -3,3 +3,6 @@ pillow
 # Best-practice semantic backend. Install these to enable --mode clip.
 torch
 transformers
+
+# Optional Gemini Vision reranker. Install/use only when enabling --gemini-rerank.
+google-genai

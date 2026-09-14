@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import base64
 import time
@@ -57,7 +57,7 @@ class PinterestClient:
         self.app_id = app_id or utils.env("PINTEREST_APP_ID")
         self.app_secret = app_secret or utils.env("PINTEREST_APP_SECRET")
         self.token_path = token_path or self._find_token_path()
-        self.tokens = self._load_tokens()
+        self.persist_tokens = self.token_path.exists()
         self.session = requests.Session()
         retry = Retry(
             total=3,
@@ -73,6 +73,7 @@ class PinterestClient:
         adapter = HTTPAdapter(max_retries=retry)
         self.session.mount("https://", adapter)
         self.session.mount("http://", adapter)
+        self.tokens = self._load_tokens()
 
     @staticmethod
     def _find_token_path() -> Path:
@@ -82,15 +83,92 @@ class PinterestClient:
         return DEFAULT_TOKEN_PATHS[0]
 
     def _load_tokens(self) -> dict[str, Any]:
-        if not self.token_path.exists():
-            raise PinterestApiError(f"Pinterest OAuth token file not found: {self.token_path}")
-        raw = utils.read_json(self.token_path)
-        if not isinstance(raw, dict) or not raw.get("access_token"):
-            raise PinterestApiError(f"Pinterest token file has no access_token: {self.token_path}")
-        return raw
+        if self.token_path.exists():
+            raw = utils.read_json(self.token_path)
+            if not isinstance(raw, dict) or not raw.get("access_token"):
+                raise PinterestApiError(f"Pinterest token file has no access_token: {self.token_path}")
+            return raw
+
+        env_tokens = self._tokens_from_env()
+        if env_tokens:
+            return env_tokens
+
+        generated_tokens = self._client_credentials_tokens()
+        if generated_tokens:
+            return generated_tokens
+
+        raise PinterestApiError(
+            "Pinterest OAuth token not found. Provide .pinterest_oauth_tokens.json, "
+            "PINTEREST_ACCESS_TOKEN, or PINTEREST_APP_ID/PINTEREST_APP_SECRET/PINTEREST_SCOPES for client_credentials."
+        )
+
+    def _tokens_from_env(self) -> dict[str, Any] | None:
+        access_token = utils.env("PINTEREST_ACCESS_TOKEN").strip()
+        if not access_token:
+            return None
+        tokens: dict[str, Any] = {
+            "access_token": access_token,
+            "token_type": utils.env("PINTEREST_TOKEN_TYPE", "bearer") or "bearer",
+        }
+        optional_fields = {
+            "refresh_token": "PINTEREST_REFRESH_TOKEN",
+            "scope": "PINTEREST_SCOPES",
+            "access_token_expires_at": "PINTEREST_ACCESS_TOKEN_EXPIRES_AT",
+            "refresh_token_expires_at": "PINTEREST_REFRESH_TOKEN_EXPIRES_AT",
+            "issued_at": "PINTEREST_TOKEN_ISSUED_AT",
+        }
+        for field, env_name in optional_fields.items():
+            value = utils.env(env_name).strip()
+            if value:
+                tokens[field] = value
+        return tokens
+
+    def _client_credentials_tokens(self) -> dict[str, Any] | None:
+        scopes = utils.env("PINTEREST_SCOPES").strip()
+        if not self.app_id or not self.app_secret or not scopes:
+            return None
+
+        auth = base64.b64encode(f"{self.app_id}:{self.app_secret}".encode("utf-8")).decode("ascii")
+        try:
+            response = self.session.post(
+                f"{self.base_url}/oauth/token",
+                headers={
+                    "Authorization": f"Basic {auth}",
+                    "Content-Type": "application/x-www-form-urlencoded",
+                    "Accept": "application/json",
+                },
+                data={
+                    "grant_type": "client_credentials",
+                    "scope": scopes,
+                },
+                timeout=self.timeout,
+            )
+        except RequestException as exc:
+            raise PinterestApiError(f"{explain_network_error(exc)} Original error: {exc}") from exc
+
+        try:
+            payload = response.json()
+        except Exception:
+            payload = response.text
+        if not 200 <= response.status_code < 300:
+            raise PinterestApiError(
+                "Pinterest client_credentials token request failed. Check app approval, 2FA, client secret, and scopes.",
+                response.status_code,
+                payload,
+            )
+        if not isinstance(payload, dict) or not payload.get("access_token"):
+            raise PinterestApiError("Pinterest client_credentials response had no access_token.", response.status_code, payload)
+
+        now = time.time()
+        if payload.get("expires_in") and not payload.get("access_token_expires_at"):
+            payload["access_token_expires_at"] = now + float(payload["expires_in"])
+        payload.setdefault("issued_at", now)
+        payload.setdefault("scope", scopes)
+        return payload
 
     def _save_tokens(self) -> None:
-        utils.write_json(self.token_path, self.tokens)
+        if self.persist_tokens:
+            utils.write_json(self.token_path, self.tokens)
 
     def _access_token_expired(self) -> bool:
         expires_at = self.tokens.get("access_token_expires_at")

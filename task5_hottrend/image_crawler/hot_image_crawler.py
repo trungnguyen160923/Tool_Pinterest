@@ -17,7 +17,7 @@ if __package__ in {None, ""}:
     from task5_hottrend.image_crawler.vision_filter import ProductVisionFilter
     from task5_hottrend.shared.cache import JsonCache
     from task5_hottrend.shared.models import ImageCandidate, RankedImage, SearchResult
-    from task5_hottrend.shared.product_policy import infer_product_policy
+    from task5_hottrend.shared.product_policy import generate_product_policy
     from task5_hottrend.shared.utils import configure_logging, dataclass_to_dict, env, html_page, utc_now_iso, write_csv, write_json
 else:
     from .dedupe import dedupe_candidates
@@ -27,7 +27,7 @@ else:
     from .vision_filter import ProductVisionFilter
     from ..shared.cache import JsonCache
     from ..shared.models import ImageCandidate, RankedImage, SearchResult
-    from ..shared.product_policy import infer_product_policy
+    from ..shared.product_policy import generate_product_policy
     from ..shared.utils import configure_logging, dataclass_to_dict, env, html_page, utc_now_iso, write_csv, write_json
 
 
@@ -43,11 +43,10 @@ def collect_results(
     max_trends: int,
     max_queries_per_trend: int,
     timeout: int,
-    token_path: str,
     locale: str,
 ) -> tuple[list[SearchResult], dict]:
     package = load_trend_package(package_path)
-    provider = provider_from_name(provider_name, timeout=timeout, token_path=token_path)
+    provider = provider_from_name(provider_name, timeout=timeout)
     audit = {
         "provider": provider_name,
         "package": package_path,
@@ -215,7 +214,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Crawl/download/rank hot product images from a trend_package.json contract.")
     parser.add_argument("--input", required=True, help="Path to trend_package.json")
     parser.add_argument("--output", default="crawl_output")
-    parser.add_argument("--provider", choices=["auto", "pinterest-api", "pinterest-browser", "pinterest-web", "bing-images"], default="auto")
+    parser.add_argument("--provider", choices=["auto", "pinterest-browser"], default="pinterest-browser")
     parser.add_argument("--max-images-per-query", type=int, default=30)
     parser.add_argument("--max-trends", type=int, default=5)
     parser.add_argument("--max-queries-per-trend", type=int, default=6)
@@ -225,12 +224,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--accepted-product-roles", nargs="+", default=["PRIMARY"], choices=["PRIMARY", "SECONDARY", "INCIDENTAL", "UNVERIFIED"])
     parser.add_argument("--min-product-visibility", type=float, default=75.0)
     parser.add_argument("--min-trend-relevance", type=float, default=70.0)
-    parser.add_argument("--product-focus", choices=["auto", "area-rug", "any-floor-covering"], default="auto")
+    parser.add_argument("--product-focus", default="auto", help="Target product focus. Can be auto or any product phrase, e.g. blanket, leather-bag, ceramic-mug.")
     parser.add_argument("--dhash-distance", type=int, default=5)
     parser.add_argument("--locale", default=env("PINTEREST_LOCALE", "en-US"))
-    parser.add_argument("--token-path", default="")
     parser.add_argument("--timeout", type=int, default=int(env("PINTEREST_TIMEOUT", "30") or 30))
     parser.add_argument("--vision-mode", choices=["auto", "required", "off"], default="auto")
+    parser.add_argument("--crawl-purpose", choices=["product", "inspiration"], default="product")
     parser.add_argument("--vision-model", default=env("GEMINI_VISION_MODEL", env("GEMINI_ANALYSIS_MODEL", "gemini-2.5-flash")))
     parser.add_argument("--gemini-backend", choices=["auto", "enterprise", "api-key"], default="auto")
     parser.add_argument("--vision-batch-size", type=int, default=5)
@@ -254,7 +253,6 @@ def main() -> int:
         max_trends=max(1, args.max_trends),
         max_queries_per_trend=max(1, args.max_queries_per_trend),
         timeout=args.timeout,
-        token_path=args.token_path,
         locale=args.locale,
     )
 
@@ -268,6 +266,14 @@ def main() -> int:
     )
 
     package = context["package"]
+    product_policy = generate_product_policy(
+        niche=package.niche,
+        product_focus=args.product_focus,
+        model=args.vision_model,
+        backend=args.gemini_backend,
+        output_path=output_dir / "product_policy.json",
+    )
+
     vision = ProductVisionFilter(
         niche=package.niche,
         model=args.vision_model,
@@ -277,6 +283,8 @@ def main() -> int:
         refresh_cache=args.refresh_vision_cache,
         mode=args.vision_mode,
         product_focus=args.product_focus,
+        product_policy=product_policy,
+        crawl_purpose=args.crawl_purpose,
     )
     vision_results = vision.analyze(candidates)
     write_json(output_dir / "product_vision_analysis.json", vision_results)
@@ -299,28 +307,22 @@ def main() -> int:
         min_trend_relevance=args.min_trend_relevance,
         niche=package.niche,
         product_focus=args.product_focus,
+        product_policy=product_policy,
+        crawl_purpose=args.crawl_purpose,
     )
     rejected = [
         *[dataclass_to_dict(item) for item in download_rejected],
         *vision_rejected,
     ]
-    product_policy = infer_product_policy(package.niche, args.product_focus)
-
     metadata = {
         "generated_at": utc_now_iso(),
         "input": args.input,
         "provider": args.provider,
         "vision_mode": args.vision_mode,
         "product_focus": args.product_focus,
+        "crawl_purpose": args.crawl_purpose,
         "product_policy": {
-            "policy_id": product_policy.policy_id,
-            "display_name": product_policy.display_name,
-            "target_keywords": sorted(product_policy.target_keywords),
-            "accepted_types": sorted(product_policy.accepted_types),
-            "excluded_types": sorted(product_policy.excluded_types),
-            "require_floor_textile": product_policy.require_floor_textile,
-            "require_physical_product": product_policy.require_physical_product,
-            "reject_collage": product_policy.reject_collage,
+            **product_policy.to_dict(),
         },
         "policy": {
             "accepted_product_roles": args.accepted_product_roles,
@@ -329,6 +331,7 @@ def main() -> int:
             "min_image_score": args.min_image_score,
             "product_focus": args.product_focus,
             "product_policy": product_policy.policy_id,
+            "crawl_purpose": args.crawl_purpose,
             "require_physical_product": product_policy.require_physical_product,
             "reject_collage": product_policy.reject_collage,
         },

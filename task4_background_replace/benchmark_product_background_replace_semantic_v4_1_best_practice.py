@@ -100,6 +100,10 @@ The local placement engine executes that semantic plan.
 
 from __future__ import annotations
 
+import builtins
+import functools
+print = functools.partial(builtins.print, flush=True)
+
 import argparse
 import base64
 import io

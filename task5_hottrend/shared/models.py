@@ -102,6 +102,13 @@ class VisionResult:
     reject_reason_code: str = ""
     policy_reject_reason: str = ""
     error: str = ""
+    source_role: str = "unknown"
+    is_lifestyle_scene: bool = False
+    foreground_coverage: float = 0.0
+    background_complexity: float = 0.0
+    flat_artwork_score: float = 0.0
+    printability_score: float = 0.0
+    requires_extraction: bool = False
 
 
 @dataclass
@@ -132,3 +139,10 @@ class RankedImage:
     main_subject: str = ""
     target_product_type: str = ""
     motifs: list[str] = field(default_factory=list)
+    source_role: str = "unknown"
+    is_lifestyle_scene: bool = False
+    foreground_coverage: float = 0.0
+    background_complexity: float = 0.0
+    flat_artwork_score: float = 0.0
+    printability_score: float = 0.0
+    requires_extraction: bool = False
