@@ -840,14 +840,14 @@ def render_run_history(output_root: Path, preview_limit: int) -> None:
         else:
             st.warning("This run has no final images.")
             render_empty_run_reason(crawl_manifest, run_dir)
+    elif has_candidate_review:
+        st.info(f"✨ **Candidate Review Available:** This run contains candidate images and {len(final_pngs)} produced prints. You can review all candidates below or switch tabs to 'Compare' / 'Final PNG' / 'Mockups'.")
 
-    if has_candidate_review and not final_pngs:
-        section_options = ["Candidate Review", "Compare", "Files", "Config"]
-    else:
-        section_options = ["Compare"]
-        if has_candidate_review:
-            section_options.append("Candidate Review")
-        section_options.extend(["Final PNG", "AI Background", "Product Cutouts", "Mockups", "Designs", "Enhanced", "Cropped", "Files", "Config"])
+    section_options = []
+    if has_candidate_review:
+        section_options.append("Candidate Review")
+    section_options.append("Compare")
+    section_options.extend(["Final PNG", "AI Background", "Product Cutouts", "Mockups", "Designs", "Enhanced", "Cropped", "Files", "Config"])
 
     section = st.radio(
         "Run section",
@@ -861,7 +861,9 @@ def render_run_history(output_root: Path, preview_limit: int) -> None:
     elif section == "Candidate Review":
         review_data = read_json(run_dir / "candidate_review.json")
         if isinstance(review_data, dict):
-            render_candidate_review_ui(review_data, key_prefix=f"hist_{run_dir.name}")
+            raw_cfg = read_json(run_dir / "config.json")
+            pipe_cfg = restore_pipeline_config(raw_cfg, output_root) if isinstance(raw_cfg, dict) else None
+            render_candidate_review_ui(review_data, config=pipe_cfg, key_prefix=f"hist_{run_dir.name}", is_running=False)
         else:
             st.info("No candidate review data found.")
     elif section == "AI Background":
@@ -1232,8 +1234,7 @@ if not active_pkg and not is_running:
     latest_runs = list_run_dirs(out_root)
     if latest_runs:
         latest_cand_file = latest_runs[0] / "candidate_review.json"
-        has_final_pngs = bool(production_final_files(latest_runs[0], "*.png"))
-        if latest_cand_file.exists() and not has_final_pngs:
+        if latest_cand_file.exists():
             active_pkg = read_json(latest_cand_file)
             st.session_state["active_candidate_package"] = active_pkg
             raw_cfg = read_json(latest_runs[0] / "config.json")
