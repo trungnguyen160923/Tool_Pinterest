@@ -792,6 +792,7 @@ def run_production_from_candidates(
                                 attempts=max(1, config.task4_quality_attempts),
                                 pose=pose,
                                 variant=var_idx,
+                                progress=progress,
                             )
                         template_mockup_records.append(rec.to_dict())
                         if rec.status == "ok" and rec.mockup_path and rec.mockup_path.exists():

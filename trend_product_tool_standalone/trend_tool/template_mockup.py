@@ -62,6 +62,8 @@ def build_template_mockup(
     attempts: int = 3,
     pose: TemplatePose | None = None,
     variant: int = 1,
+    progress: Any = None,
+    **kwargs: Any,
 ) -> TemplateMockupRecord:
     output_dir.mkdir(parents=True, exist_ok=True)
     stem = print_path.stem.replace("_rgb", "")
@@ -145,6 +147,8 @@ def build_direct_ai_mockup(
     attempts: int = 3,
     pose: TemplatePose | None = None,
     variant: int = 1,
+    progress: Any = None,
+    **kwargs: Any,
 ) -> TemplateMockupRecord:
     """Have the image model render real cloth geometry rather than compositing a flat print."""
     output_dir.mkdir(parents=True, exist_ok=True)
