@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import base64
+import dataclasses
+from dataclasses import replace
 import json
 import importlib
 import secrets
@@ -404,8 +406,15 @@ def run_summary(run_dir: Path) -> dict[str, object]:
     product_cutouts = image_files(run_dir / "product_cutouts", "*.png")
     product_cutouts_white = image_files(run_dir / "product_cutouts_white", "*.png")
     designs = design_files(run_dir)
+    has_candidate_review = (run_dir / "candidate_review.json").exists()
     status = "ok" if final_pngs else "empty"
-    if errors and not final_pngs:
+    if has_candidate_review and not final_pngs:
+        rev_data = read_json(run_dir / "candidate_review.json")
+        if isinstance(rev_data, dict) and rev_data.get("status") == "failed":
+            status = "crawl_failed"
+        else:
+            status = "review_ready"
+    elif errors and not final_pngs:
         status = "crawl_failed"
     if (
         final_pngs
@@ -565,6 +574,10 @@ def render_comparison_cell(column, label: str, path: Path | None) -> None:
             st.warning("missing")
 
 
+def restore_pipeline_config(raw_cfg: dict, fallback_root: Path) -> PipelineConfig:
+    return config_module.restore_pipeline_config(raw_cfg, fallback_root)
+
+
 def render_candidate_review_ui(
     package_data: dict | CandidateReviewPackage,
     config: PipelineConfig | None = None,
@@ -579,9 +592,11 @@ def render_candidate_review_ui(
         run_dir = Path(str(package_data.get("run_dir") or "."))
         candidates_raw = package_data.get("candidates") or []
         candidates = []
+        valid_candidate_fields = {f.name for f in dataclasses.fields(CandidateReviewItem)}
         for item in candidates_raw:
             if isinstance(item, dict):
-                candidates.append(CandidateReviewItem(**item))
+                clean_item = {k: v for k, v in item.items() if k in valid_candidate_fields}
+                candidates.append(CandidateReviewItem(**clean_item))
             elif isinstance(item, CandidateReviewItem):
                 candidates.append(item)
     else:
@@ -620,14 +635,22 @@ def render_candidate_review_ui(
             horizontal=True,
             key=f"filter_{prefix}",
         )
+
+    # Filter candidate list based on active filter
+    displayed_candidates = candidates
+    if "Direct-Print" in view_filter:
+        displayed_candidates = [c for c in candidates if c.is_direct_printable]
+    elif "Flat Patterns" in view_filter:
+        displayed_candidates = [c for c in candidates if "pattern" in c.classification.lower()]
+
     with col_btn1:
-        if st.button("Select All", key=f"sel_all_{prefix}"):
-            for c in candidates:
+        if st.button("Select All (Filtered)", key=f"sel_all_{prefix}"):
+            for c in displayed_candidates:
                 st.session_state[f"sel_{prefix}_{c.image_id}"] = True
             st.rerun()
     with col_btn2:
-        if st.button("Deselect All", key=f"desel_all_{prefix}"):
-            for c in candidates:
+        if st.button("Deselect All (Filtered)", key=f"desel_all_{prefix}"):
+            for c in displayed_candidates:
                 st.session_state[f"sel_{prefix}_{c.image_id}"] = False
             st.rerun()
     with col_btn3:
@@ -636,18 +659,37 @@ def render_candidate_review_ui(
                 st.session_state[f"sel_{prefix}_{c.image_id}"] = c.recommended
             st.rerun()
 
-    # Filter candidate list
-    displayed_candidates = candidates
-    if "Direct-Print" in view_filter:
-        displayed_candidates = [c for c in candidates if c.is_direct_printable]
-    elif "Flat Patterns" in view_filter:
-        displayed_candidates = [c for c in candidates if "pattern" in c.classification.lower()]
+    # Pagination controls
+    page_size_options = [12, 24, 48, 96, "All"]
+    p_ctrl1, p_ctrl2 = st.columns([1, 2])
+    with p_ctrl1:
+        sel_size = st.selectbox(
+            "Images / page",
+            page_size_options,
+            index=0,
+            key=f"pg_size_{prefix}",
+        )
+    page_size = len(displayed_candidates) if sel_size == "All" else int(sel_size)
+    page_count = max(1, (len(displayed_candidates) + page_size - 1) // max(1, page_size))
+    with p_ctrl2:
+        cur_page = st.number_input(
+            f"Page (1 to {page_count})",
+            min_value=1,
+            max_value=page_count,
+            value=1,
+            step=1,
+            key=f"pg_num_{prefix}",
+        )
 
-    st.caption(f"Showing {len(displayed_candidates)} image(s). Tick the checkbox on candidates you want to produce.")
+    start_idx = (int(cur_page) - 1) * page_size
+    end_idx = min(start_idx + page_size, len(displayed_candidates))
+    page_candidates = displayed_candidates[start_idx:end_idx]
+
+    st.caption(f"Showing {len(page_candidates)} of {len(displayed_candidates)} candidate(s) (total pool: {len(candidates)}). Tick checkboxes to select images for production.")
 
     # Render gallery in 3 columns
     cols = st.columns(3)
-    for idx, c in enumerate(displayed_candidates):
+    for idx, c in enumerate(page_candidates):
         with cols[idx % 3]:
             with st.container(border=True):
                 check_key = f"sel_{prefix}_{c.image_id}"
@@ -678,13 +720,39 @@ def render_candidate_review_ui(
                 if c.pin_url:
                     st.link_button("View Pin", c.pin_url)
 
-    # Produce Selected Button
+                # Full-res preview & inspection details
+                with st.expander("🔍 Full-Res Preview & Details"):
+                    if img_path.exists():
+                        st.image(str(img_path), caption=f"{img_path.name} ({c.width or '?'}x{c.height or '?'} px)", width="stretch")
+                    elif c.image_url:
+                        st.image(c.image_url, caption=f"Remote URL ({c.width or '?'}x{c.height or '?'} px)", width="stretch")
+                    st.write({
+                        "Image Score": round(c.image_score, 1),
+                        "Flat Artwork Score": round(c.flat_artwork_score, 2),
+                        "Printability Score": round(c.printability_score, 2),
+                        "Classification": c.classification,
+                        "Direct Printable": c.is_direct_printable,
+                        "Dimensions": f"{c.width or '?'}x{c.height or '?'} px",
+                        "Motifs": c.motifs or "None detected",
+                        "Source Role": c.source_role,
+                    })
+
+    # Step 3 Production Action Bar
     st.divider()
     currently_selected = [
         c for c in candidates
         if st.session_state.get(f"sel_{prefix}_{c.image_id}", c.recommended)
     ]
-    p_col1, p_col2 = st.columns([3, 1])
+    p_col1, p_col2 = st.columns([2, 1])
+    with p_col2:
+        step2_design_mode = st.selectbox(
+            "Step 2 Design Mode",
+            ["direct", "ai_artwork"],
+            format_func=lambda x: "Direct Print (Pinterest Pattern)" if x == "direct" else "AI Artwork (Gemini Redraw)",
+            index=0 if getattr(config, "design_mode", "direct") == "direct" else 1,
+            key=f"mode_{prefix}",
+            help="Direct Print uses the enhanced Pinterest artwork directly. AI Artwork redraws it with Gemini.",
+        )
     with p_col1:
         produce_clicked = st.button(
             f"🚀 2. Produce Selected Images ({len(currently_selected)} items)",
@@ -696,20 +764,13 @@ def render_candidate_review_ui(
         if config is None:
             raw_cfg = read_json(run_dir / "config.json")
             if isinstance(raw_cfg, dict):
-                target_raw = raw_cfg.get("target") or {}
-                target_obj = ProductTarget(
-                    name=target_raw.get("name", "rug"),
-                    width_px=int(target_raw.get("width_px", 4000)),
-                    height_px=int(target_raw.get("height_px", 6400)),
-                    dpi=int(target_raw.get("dpi", 300)),
-                )
-                config = PipelineConfig(
-                    target=target_obj,
-                    output_root=run_dir.parent,
-                    trend_niche=str(raw_cfg.get("trend_niche", "")),
-                    design_mode=str(raw_cfg.get("design_mode", "direct")),
-                )
+                config = restore_pipeline_config(raw_cfg, run_dir.parent)
         if config is not None:
+            config = replace(
+                config,
+                design_mode=step2_design_mode,
+                task4_ai_limit=max(len(currently_selected), config.task4_ai_limit),
+            )
             active_run = start_production_run(currently_selected, config, run_dir=run_dir)
             st.session_state["trend_product_active_run"] = active_run
             st.rerun()

@@ -92,25 +92,28 @@ class ProductVisionFilter:
         raise ValueError("Gemini Vision response must be an object or a list of result objects.")
 
     def _fallback(self, candidate: ImageCandidate, reason: str = "Vision disabled/unavailable.") -> VisionResult:
+        is_off = self.mode == "off"
         return VisionResult(
             image_id=candidate.image_id,
-            accepted=self.mode == "off",
-            product_present=self.mode == "off",
-            product_role="UNVERIFIED" if self.mode == "off" else "UNCERTAIN",
-            product_confidence=0.0,
-            product_visibility=0.0,
-            trend_relevance=55.0 if self.mode == "off" else 0.0,
-            commercial_quality=50.0 if self.mode == "off" else 0.0,
-            aesthetic="",
-            detected_product="",
+            accepted=is_off,
+            product_present=is_off,
+            product_role="PRIMARY" if is_off else "UNCERTAIN",
+            product_confidence=0.85 if is_off else 0.0,
+            product_visibility=85.0 if is_off else 0.0,
+            trend_relevance=75.0 if is_off else 0.0,
+            commercial_quality=70.0 if is_off else 0.0,
+            aesthetic="unverified" if is_off else "",
+            detected_product="unverified_artwork" if is_off else "",
             reason=reason,
-            confidence=0.0,
-            main_subject="unverified" if self.mode == "off" else "unknown",
-            target_product_type="unverified" if self.mode == "off" else "",
-            is_single_product=self.mode == "off",
-            is_physical_product=self.mode == "off",
-            is_floor_textile=self.mode == "off",
-            reject_reason_code="" if self.mode == "off" else "VISION_UNAVAILABLE",
+            confidence=0.85 if is_off else 0.0,
+            main_subject="pattern" if is_off else "unknown",
+            target_product_type="printable_inspiration" if is_off else "",
+            is_single_product=is_off,
+            is_physical_product=is_off,
+            is_floor_textile=is_off,
+            flat_artwork_score=0.80 if is_off else 0.0,
+            printability_score=0.75 if is_off else 0.0,
+            reject_reason_code="" if is_off else "VISION_UNAVAILABLE",
         )
 
     def _prompt(self, batch: list[ImageCandidate]) -> str:

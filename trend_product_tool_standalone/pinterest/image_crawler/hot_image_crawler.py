@@ -18,6 +18,7 @@ if __package__ in {None, ""}:
     from pinterest.shared.cache import JsonCache
     from pinterest.shared.models import ImageCandidate, RankedImage, SearchResult
     from pinterest.shared.product_policy import generate_product_policy
+    from pinterest.shared.utils import configure_logging, dataclass_to_dict, env, html_page, utc_now_iso, write_csv, write_json
     from pinterest.trend_finder.semantic_analyzer import build_smart_queries
 else:
     from .dedupe import dedupe_candidates

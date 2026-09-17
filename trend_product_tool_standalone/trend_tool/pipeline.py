@@ -145,6 +145,15 @@ def run_pipeline(
         if not selected:
             selected = package.candidates[: max(1, config.desired_output_count)]
         if not selected:
+            stage_manifest = {
+                "status": "failed",
+                "reason": "no_images_after_crawl_and_review",
+                "message": "No candidate images passed crawl & review.",
+                "design_records": [],
+                "enhancement_records": [],
+            }
+            write_json(package.run_dir / "stage_manifest.json", stage_manifest)
+            write_resilient_report(package.run_dir / "report.html", config, [], [], [], stage_manifest)
             raise RuntimeError("No candidate images passed crawl & review.")
         return run_production_from_candidates(
             selected_items=selected,
@@ -457,6 +466,8 @@ def run_crawl_and_review_stage(
             "candidates": [],
         }
         write_json(run_dir / "candidate_review.json", review_manifest)
+        write_json(run_dir / "stage_manifest.json", review_manifest)
+        write_resilient_report(run_dir / "report.html", config, [], [], [], review_manifest)
         raise RuntimeError(review_manifest["message"])
 
     filtered, filter_decisions = filter_candidates(task5_candidates)
@@ -560,10 +571,10 @@ def run_production_from_candidates(
     # Resolve candidate image paths and metadata
     resolved_sources: list[tuple[Path, str, dict[str, object]]] = []
     for item in selected_items:
-        if isinstance(item, CandidateReviewItem):
-            path = Path(item.local_path)
-            keyword = item.query or item.trend
-            meta = item.to_dict()
+        if isinstance(item, CandidateReviewItem) or (hasattr(item, "local_path") and hasattr(item, "image_id")):
+            path = Path(str(getattr(item, "local_path")))
+            keyword = str(getattr(item, "query", "") or getattr(item, "trend", "") or path.stem)
+            meta = item.to_dict() if hasattr(item, "to_dict") else dict(getattr(item, "__dict__", {}))
         elif isinstance(item, CandidateImage):
             path = item.path
             keyword = item.keyword
@@ -583,6 +594,15 @@ def run_production_from_candidates(
             resolved_sources.append((path, keyword, meta))
 
     if not resolved_sources:
+        stage_manifest = {
+            "status": "failed",
+            "reason": "no_valid_production_sources",
+            "message": "No valid candidate images provided for production.",
+            "design_records": [],
+            "enhancement_records": [],
+        }
+        write_json(run_dir / "stage_manifest.json", stage_manifest)
+        write_resilient_report(run_dir / "report.html", config, [], [], [], stage_manifest)
         raise RuntimeError("No valid candidate images provided for production.")
 
     design_dir = run_dir / "artwork_designs"
@@ -645,7 +665,7 @@ def run_production_from_candidates(
 
         design_record = make_print_design(
             design_source,
-            design_dir / f"{base}_artwork.png",
+            design_dir / f"{base}_design.png",
             config.target,
             applied_design_mode,
         )
@@ -781,6 +801,9 @@ def run_production_from_candidates(
                             ai_background_final_records.append({
                                 "source_path": rec.mockup_path,
                                 "lifestyle_path": lifestyle_copy,
+                                "print_path": print_file,
+                                "mockup_path": lifestyle_copy,
+                                "final_rgb_path": lifestyle_copy,
                                 "asset_type": "lifestyle_mockup",
                                 "status": "ok",
                             })

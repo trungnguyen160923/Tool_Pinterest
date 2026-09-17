@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -91,3 +91,33 @@ def product_preset(name: str) -> ProductTarget:
     if normalized == "custom":
         return ProductTarget(name="custom", width_px=4000, height_px=6400, allow_custom_shape=True)
     return ProductTarget(name="rug", width_px=4000, height_px=6400)
+
+
+def restore_pipeline_config(raw_cfg: dict, fallback_root: Path) -> PipelineConfig:
+    import dataclasses
+    target_raw = raw_cfg.get("target") or {}
+    target_obj = ProductTarget(
+        name=str(target_raw.get("name", "rug")),
+        width_px=int(target_raw.get("width_px", 4000)),
+        height_px=int(target_raw.get("height_px", 6400)),
+        dpi=int(target_raw.get("dpi", 300)),
+        prefer_cmyk=bool(target_raw.get("prefer_cmyk", True)),
+        allow_custom_shape=bool(target_raw.get("allow_custom_shape", False)),
+        rug_shape=str(target_raw.get("rug_shape", "rectangle")),
+    )
+    valid_fields = {f.name: f for f in dataclasses.fields(PipelineConfig)}
+    kwargs: dict[str, object] = {}
+    for key, val in raw_cfg.items():
+        if key == "target" or key not in valid_fields:
+            continue
+        field_type = str(valid_fields[key].type)
+        if "Path" in field_type:
+            kwargs[key] = Path(val) if val else None
+        elif "tuple" in field_type and isinstance(val, list):
+            kwargs[key] = tuple(val)
+        else:
+            kwargs[key] = val
+    kwargs["target"] = target_obj
+    if "output_root" not in kwargs or not kwargs["output_root"]:
+        kwargs["output_root"] = fallback_root
+    return PipelineConfig(**kwargs)

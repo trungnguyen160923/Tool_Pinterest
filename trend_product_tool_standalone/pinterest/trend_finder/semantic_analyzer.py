@@ -35,10 +35,10 @@ VISUAL_TREND_TERMS = {
 
 NON_TEXTILE_STOPWORDS_REGEX = re.compile(
     r"\b("
-    r"nails?|acrylic\s+nails?|gel\s+nails?|nail\s+art|manicure|pedicure|"
-    r"hair|hairstyles?|haircuts?|hair\s+color|braids?|updo|"
-    r"makeup|lipsticks?|eyeshadow|mascara|lip\s+gloss|skincare|eyelashes?|eyebrows?|"
-    r"wallpapers?|lockscreens?|phone\s+cases?|iphone\s+wallpapers?|widgets?|home\s+screen|"
+    r"nails?|nail[\s_-]*art|nail[\s_-]*tech|press[\s_-]*on[\s_-]*nails?|acrylic[\s_-]*nails?|gel[\s_-]*nails?|manicure|pedicure|"
+    r"hair|hair[\s_-]*styles?|hair[\s_-]*cuts?|hair[\s_-]*color|braids?|updo|"
+    r"makeup|make[\s_-]*up|lipsticks?|eye[\s_-]*shadow|mascara|lip[\s_-]*gloss|skin[\s_-]*care|eye[\s_-]*lashes?|eye[\s_-]*brows?|"
+    r"wallpapers?|lock[\s_-]*screens?|phone[\s_-]*cases?|iphone[\s_-]*wallpapers?|widgets?|home[\s_-]*screens?|"
     r"outfits?|ootd|shoes|sneakers|heels|dresses|tattoos?|piercings?|jewelry|"
     r"quotes?|memes?|workout|gym|diet"
     r")\b",

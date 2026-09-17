@@ -61,7 +61,11 @@ def build_comparison_rows(run_dir: Path, stage_manifest: dict[str, Any] | None) 
                 source_path=source,
                 cutout_path=cutout,
                 cutout_white_path=cutout_white,
-                final_print_path=(asset_to_final.get(path_key(asset)) if asset else None) or profile_final,
+                final_print_path=(
+                    (asset_to_final.get(path_key(source)) if source else None)
+                    or (asset_to_final.get(path_key(asset)) if asset else None)
+                    or profile_final
+                ),
                 ai_background_path=background_paths[0] if background_paths else None,
                 ai_background_paths=background_paths,
                 status=str(record.get("status") or ""),
@@ -87,9 +91,13 @@ def final_print_by_design_source(run_dir: Path, design_records: list[dict[str, A
 
 def final_print_path_for_design(run_dir: Path, design_path: Path) -> Path | None:
     name = design_path.name
-    if not name.endswith("_design.png"):
+    base = None
+    for suffix in ("_design.png", "_artwork.png"):
+        if name.endswith(suffix):
+            base = name[: -len(suffix)]
+            break
+    if not base:
         return None
-    base = name[: -len("_design.png")]
     matches = sorted((run_dir / "final_print").glob(f"{base}_*_rgb.png"))
     return matches[0] if matches else None
 
@@ -116,9 +124,11 @@ def ai_background_by_product(
 
     output: dict[str, list[Path]] = {}
     for record in ai_final_records:
-        # template_ai records preserve the print-to-product contract directly.
+        # template_ai and lifestyle mockup records preserve the print-to-product contract directly.
         template_print = resolve_run_path(record.get("print_path"), run_dir)
-        template_mockup = resolve_run_path(record.get("mockup_path"), run_dir)
+        template_mockup = resolve_run_path(
+            record.get("mockup_path") or record.get("lifestyle_path"), run_dir
+        )
         if template_print is not None and template_mockup is not None:
             matched_product = print_to_product.get(path_key(template_print))
             if matched_product is not None:
