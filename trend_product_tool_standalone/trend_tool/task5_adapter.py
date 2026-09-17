@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
 import os
@@ -48,7 +48,7 @@ class Task5CrawlerConfig:
     max_downloads: int = 250
     top_images: int = 100
     vision_mode: str = "auto"
-    crawl_purpose: str = "product"
+    crawl_purpose: str = "inspiration"
     product_focus: str = "auto"
     gemini_backend: str = "auto"
     vision_model: str = "gemini-2.5-flash"

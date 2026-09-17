@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import json
@@ -46,6 +46,10 @@ PipelineConfig = config_module.PipelineConfig
 ProductTarget = config_module.ProductTarget
 product_preset = config_module.product_preset
 run_pipeline = pipeline_module.run_pipeline
+run_crawl_and_review_stage = pipeline_module.run_crawl_and_review_stage
+run_production_from_candidates = pipeline_module.run_production_from_candidates
+CandidateReviewItem = pipeline_module.CandidateReviewItem
+CandidateReviewPackage = pipeline_module.CandidateReviewPackage
 PipelineCancelled = pipeline_module.PipelineCancelled
 env = settings_module.env
 env_int = settings_module.env_int
@@ -55,6 +59,83 @@ build_comparison_rows = comparison_module.build_comparison_rows
 
 
 load_tool_env()
+
+
+def start_crawl_and_review_run(config: PipelineConfig) -> dict[str, object]:
+    cancel_event = threading.Event()
+    state: dict[str, object] = {
+        "kind": "crawl_and_review",
+        "cancel_event": cancel_event,
+        "logs": [],
+        "status": "running",
+        "package": None,
+        "error": None,
+    }
+
+    def worker() -> None:
+        def progress(message: str) -> None:
+            logs = state["logs"]
+            assert isinstance(logs, list)
+            logs.append(f"{datetime.now().strftime('%H:%M:%S')} | {message}")
+
+        try:
+            state["package"] = run_crawl_and_review_stage(config, progress=progress, cancel_event=cancel_event)
+            state["status"] = "review_ready"
+        except PipelineCancelled as exc:
+            state["error"] = str(exc)
+            state["status"] = "cancelled"
+        except Exception as exc:
+            state["error"] = str(exc)
+            state["status"] = "cancelled" if cancel_event.is_set() else "failed"
+
+    thread = threading.Thread(target=worker, name="trend-crawl-review", daemon=True)
+    state["thread"] = thread
+    thread.start()
+    return state
+
+
+def start_production_run(
+    selected_items: list,
+    config: PipelineConfig,
+    run_dir: Path,
+) -> dict[str, object]:
+    cancel_event = threading.Event()
+    state: dict[str, object] = {
+        "kind": "production",
+        "cancel_event": cancel_event,
+        "logs": [],
+        "status": "running",
+        "result": None,
+        "error": None,
+    }
+
+    def worker() -> None:
+        def progress(message: str) -> None:
+            logs = state["logs"]
+            assert isinstance(logs, list)
+            logs.append(f"{datetime.now().strftime('%H:%M:%S')} | {message}")
+
+        try:
+            state["result"] = run_production_from_candidates(
+                selected_items,
+                config,
+                run_dir=run_dir,
+                progress=progress,
+                cancel_event=cancel_event,
+            )
+            state["status"] = "complete"
+        except PipelineCancelled as exc:
+            state["error"] = str(exc)
+            state["status"] = "cancelled"
+        except Exception as exc:
+            state["error"] = str(exc)
+            state["status"] = "cancelled" if cancel_event.is_set() else "failed"
+
+    thread = threading.Thread(target=worker, name="trend-production", daemon=True)
+    state["thread"] = thread
+    thread.start()
+    return state
+
 
 
 def start_pipeline_run(config: PipelineConfig) -> dict[str, object]:
@@ -484,6 +565,156 @@ def render_comparison_cell(column, label: str, path: Path | None) -> None:
             st.warning("missing")
 
 
+def render_candidate_review_ui(
+    package_data: dict | CandidateReviewPackage,
+    config: PipelineConfig | None = None,
+    is_running: bool = False,
+    key_prefix: str = "review",
+) -> None:
+    st.subheader("Candidate Image Review (Human-in-the-Loop)")
+    if isinstance(package_data, CandidateReviewPackage):
+        run_dir = package_data.run_dir
+        candidates = package_data.candidates
+    elif isinstance(package_data, dict):
+        run_dir = Path(str(package_data.get("run_dir") or "."))
+        candidates_raw = package_data.get("candidates") or []
+        candidates = []
+        for item in candidates_raw:
+            if isinstance(item, dict):
+                candidates.append(CandidateReviewItem(**item))
+            elif isinstance(item, CandidateReviewItem):
+                candidates.append(item)
+    else:
+        return
+
+    if not candidates:
+        st.info("No candidates available for review.")
+        return
+
+    direct_count = sum(1 for c in candidates if c.is_direct_printable)
+    pattern_count = sum(1 for c in candidates if "pattern" in c.classification.lower())
+
+    metric_cols = st.columns(4)
+    metric_cols[0].metric("Total Candidates", len(candidates))
+    metric_cols[1].metric("Direct-Print Ready", direct_count)
+    metric_cols[2].metric("Flat Patterns", pattern_count)
+
+    prefix = f"{key_prefix}_{run_dir.name}"
+    for c in candidates:
+        check_key = f"sel_{prefix}_{c.image_id}"
+        if check_key not in st.session_state:
+            st.session_state[check_key] = bool(c.recommended)
+
+    selected_items = [
+        c for c in candidates
+        if st.session_state.get(f"sel_{prefix}_{c.image_id}", c.recommended)
+    ]
+    metric_cols[3].metric("Selected for Production", len(selected_items))
+
+    # Controls row: filter and bulk select buttons
+    col_filter, col_btn1, col_btn2, col_btn3 = st.columns([3, 1, 1, 1])
+    with col_filter:
+        view_filter = st.radio(
+            "Filter candidates",
+            [f"All ({len(candidates)})", f"Direct-Print ({direct_count})", f"Flat Patterns ({pattern_count})"],
+            horizontal=True,
+            key=f"filter_{prefix}",
+        )
+    with col_btn1:
+        if st.button("Select All", key=f"sel_all_{prefix}"):
+            for c in candidates:
+                st.session_state[f"sel_{prefix}_{c.image_id}"] = True
+            st.rerun()
+    with col_btn2:
+        if st.button("Deselect All", key=f"desel_all_{prefix}"):
+            for c in candidates:
+                st.session_state[f"sel_{prefix}_{c.image_id}"] = False
+            st.rerun()
+    with col_btn3:
+        if st.button("Top Recommended", key=f"sel_top_{prefix}"):
+            for idx, c in enumerate(candidates):
+                st.session_state[f"sel_{prefix}_{c.image_id}"] = c.recommended
+            st.rerun()
+
+    # Filter candidate list
+    displayed_candidates = candidates
+    if "Direct-Print" in view_filter:
+        displayed_candidates = [c for c in candidates if c.is_direct_printable]
+    elif "Flat Patterns" in view_filter:
+        displayed_candidates = [c for c in candidates if "pattern" in c.classification.lower()]
+
+    st.caption(f"Showing {len(displayed_candidates)} image(s). Tick the checkbox on candidates you want to produce.")
+
+    # Render gallery in 3 columns
+    cols = st.columns(3)
+    for idx, c in enumerate(displayed_candidates):
+        with cols[idx % 3]:
+            with st.container(border=True):
+                check_key = f"sel_{prefix}_{c.image_id}"
+                st.checkbox(
+                    f"Select #{c.image_id[:10]}",
+                    key=check_key,
+                )
+                img_path = Path(c.local_path)
+                if img_path.exists():
+                    st.image(str(img_path), width="stretch")
+                elif c.image_url:
+                    st.image(c.image_url, width="stretch")
+
+                b1, b2 = st.columns(2)
+                with b1:
+                    st.markdown(f"**Score:** `{c.image_score:.0f}/100`")
+                with b2:
+                    if c.is_direct_printable:
+                        st.markdown("**:green[✓ Direct-Print]**")
+                    else:
+                        st.markdown(f"`{c.classification}`")
+
+                st.caption(f"**Trend:** {c.trend}")
+                if c.query and c.query != c.trend:
+                    st.caption(f"**Query:** {c.query}")
+                if c.reason:
+                    st.caption(f"_{c.reason[:120]}_")
+                if c.pin_url:
+                    st.link_button("View Pin", c.pin_url)
+
+    # Produce Selected Button
+    st.divider()
+    currently_selected = [
+        c for c in candidates
+        if st.session_state.get(f"sel_{prefix}_{c.image_id}", c.recommended)
+    ]
+    p_col1, p_col2 = st.columns([3, 1])
+    with p_col1:
+        produce_clicked = st.button(
+            f"🚀 2. Produce Selected Images ({len(currently_selected)} items)",
+            type="primary",
+            disabled=len(currently_selected) == 0 or bool(is_running),
+            key=f"btn_produce_{prefix}",
+        )
+    if produce_clicked:
+        if config is None:
+            raw_cfg = read_json(run_dir / "config.json")
+            if isinstance(raw_cfg, dict):
+                target_raw = raw_cfg.get("target") or {}
+                target_obj = ProductTarget(
+                    name=target_raw.get("name", "rug"),
+                    width_px=int(target_raw.get("width_px", 4000)),
+                    height_px=int(target_raw.get("height_px", 6400)),
+                    dpi=int(target_raw.get("dpi", 300)),
+                )
+                config = PipelineConfig(
+                    target=target_obj,
+                    output_root=run_dir.parent,
+                    trend_niche=str(raw_cfg.get("trend_niche", "")),
+                    design_mode=str(raw_cfg.get("design_mode", "direct")),
+                )
+        if config is not None:
+            active_run = start_production_run(currently_selected, config, run_dir=run_dir)
+            st.session_state["trend_product_active_run"] = active_run
+            st.rerun()
+
+
 def render_run_history(output_root: Path, preview_limit: int) -> None:
     runs = list_run_dirs(output_root)
     st.subheader("Run History")
@@ -545,13 +776,25 @@ def render_run_history(output_root: Path, preview_limit: int) -> None:
         st.warning("This run has no final images.")
         render_empty_run_reason(crawl_manifest, run_dir)
 
+    has_candidate_review = (run_dir / "candidate_review.json").exists()
+    section_options = ["Compare"]
+    if has_candidate_review:
+        section_options.append("Candidate Review")
+    section_options.extend(["Final PNG", "AI Background", "Product Cutouts", "Mockups", "Designs", "Enhanced", "Cropped", "Files", "Config"])
+
     section = st.radio(
         "Run section",
-        ["Compare", "Final PNG", "AI Background", "Product Cutouts", "Mockups", "Designs", "Enhanced", "Cropped", "Files", "Config"],
+        section_options,
         horizontal=True,
     )
     if section == "Compare":
         render_comparison_view(run_dir, preview_limit)
+    elif section == "Candidate Review":
+        review_data = read_json(run_dir / "candidate_review.json")
+        if isinstance(review_data, dict):
+            render_candidate_review_ui(review_data, key_prefix=f"hist_{run_dir.name}")
+        else:
+            st.info("No candidate review data found.")
     elif section == "AI Background":
         render_paginated_image_grid(ai_backgrounds, default_page_size=preview_limit, columns=3, key_prefix=f"{run_dir.name}_ai_background")
     elif section == "Product Cutouts":
@@ -631,6 +874,11 @@ def render_empty_run_reason(crawl_manifest: object | None, run_dir: Path) -> Non
 
 with st.sidebar:
     st.subheader("Main")
+    workflow_ui_mode = st.radio(
+        "Workflow Flow",
+        ["Interactive (2-Step Review)", "1-Click Auto"],
+        help="Interactive lets you review and select crawled Pinterest patterns before running upscale and mockups.",
+    )
     product_options = ["rug", "blanket", "custom"]
     product = st.selectbox("Product", product_options)
     preset = product_preset(product)
@@ -700,7 +948,13 @@ with st.sidebar:
     task5_max_crawl_trends = 5
     task5_top_images = int(task5_max_downloads)
 
-    design_mode = "ai_artwork"
+    design_mode = st.selectbox(
+        "Design Mode",
+        ["direct", "ai_artwork"],
+        format_func=lambda x: "Direct Print (Pinterest Pattern Enhanced)" if x == "direct" else "AI Artwork (Gemini Redraw)",
+        index=0,
+        help="Direct Print enhances the crawled Pinterest pattern directly without Gemini hallucination. AI Artwork asks Gemini to redraw.",
+    )
     st.caption("Crawled artwork references must pass printability checks before output.")
 
     with st.expander("Advanced settings", expanded=False):
@@ -724,81 +978,153 @@ target = ProductTarget(
     prefer_cmyk=True,
     allow_custom_shape=product == "custom",
 )
-left, middle = st.columns([1, 1])
+left, middle, right = st.columns(3)
 with left:
     st.metric("Workflow", "Trend to product")
 with middle:
+    st.metric("Flow Mode", "2-Step Review" if "Interactive" in workflow_ui_mode else "1-Click Auto")
+with right:
     st.metric("Target", f"{target.width_px} x {target.height_px}")
 
 active_run = st.session_state.get("trend_product_active_run")
 is_running = isinstance(active_run, dict) and active_run.get("status") == "running"
-run_column, stop_column = st.columns(2)
-with run_column:
-    run_clicked = st.button("Find and build", type="primary", disabled=bool(is_running))
-with stop_column:
-    stop_clicked = st.button("Stop", disabled=not bool(is_running))
+run_kind = str(active_run.get("kind") or "pipeline") if isinstance(active_run, dict) else ""
+run_status = str(active_run.get("status") or "") if isinstance(active_run, dict) else ""
 
-if stop_clicked and isinstance(active_run, dict):
-    cancel_event = active_run.get("cancel_event")
-    if isinstance(cancel_event, threading.Event):
-        cancel_event.set()
-        st.warning("Stopping the active Find and build run.")
+# Stop button when running
+if is_running:
+    stop_clicked = st.button("🛑 Stop Active Process", type="secondary")
+    if stop_clicked:
+        cancel_event = active_run.get("cancel_event")
+        if isinstance(cancel_event, threading.Event):
+            cancel_event.set()
+            st.warning("Stopping the active process...")
 
-if run_clicked:
-    if not trend_niche:
-        st.error("Enter a niche before starting Pinterest Trends discovery.")
-    else:
-        output_root = Path(output_root_text)
-        task5_token_path = Path(task5_token_path_text) if task5_token_path_text.strip() else None
-        config = PipelineConfig(
-            target=target,
-            output_root=output_root,
-            workflow_mode="trend_to_product",
-            trend_niche=trend_niche,
-            trend_region=trend_region,
-            trend_type=trend_type,
-            trend_interest=trend_interest,
-            trend_keyword_limit=int(trend_keyword_limit),
-            trend_max_trends=int(trend_max_trends),
-            trend_min_semantic_fit=float(trend_min_fit),
-            trend_max_queries_per_trend=int(trend_max_queries),
-            desired_output_count=int(desired_output_count),
-            gemini_backend=gemini_backend,
-            gemini_model=gemini_model,
-            task5_token_path=task5_token_path,
-            task5_provider=task5_provider,
-            task5_max_images_per_query=int(task5_max_images_per_query),
-            task5_max_crawl_trends=int(task5_max_crawl_trends),
-            task5_max_downloads=int(task5_max_downloads),
-            task5_top_images=int(task5_top_images),
-            task5_vision_mode=task5_vision_mode,
-            task5_refresh_vision_cache=bool(task5_refresh_vision_cache),
-            crop_mode=str(crop_mode),
-            dedupe_threshold=int(dedupe_threshold),
-            remove_white_background=bool(remove_white),
-            export_cmyk=bool(export_cmyk),
-            design_mode=design_mode,
-            artwork_image_size=artwork_image_size,
-            enhancement_mode=enhancement_mode,
-            task4_mockup_engine="direct_ai",
-            task4_ai_limit=int(desired_output_count),
-            task4_variants_per_product=int(background_variants),
+# Action trigger based on workflow mode
+if "Interactive" in workflow_ui_mode:
+    c1, c2 = st.columns([2, 3])
+    with c1:
+        run_crawl_clicked = st.button(
+            "🔍 1. Crawl & Pre-screen Images",
+            type="primary" if not is_running else "secondary",
+            disabled=bool(is_running),
+            help="Discovers home decor/textile trends, crawls Pinterest images, and scores/filters them with Gemini Vision.",
         )
-        active_run = start_pipeline_run(config)
-        st.session_state["trend_product_active_run"] = active_run
+    with c2:
+        st.caption("Step 1 collects and pre-screens patterns. You will then be able to review, filter, and choose which patterns to upscale and mock up.")
+
+    if run_crawl_clicked:
+        if not trend_niche:
+            st.error("Enter a niche before starting Pinterest Trends discovery.")
+        else:
+            output_root = Path(output_root_text)
+            task5_token_path = Path(task5_token_path_text) if task5_token_path_text.strip() else None
+            config = PipelineConfig(
+                target=target,
+                output_root=output_root,
+                workflow_mode="trend_to_product",
+                trend_niche=trend_niche,
+                trend_region=trend_region,
+                trend_type=trend_type,
+                trend_interest=trend_interest,
+                trend_keyword_limit=int(trend_keyword_limit),
+                trend_max_trends=int(trend_max_trends),
+                trend_min_semantic_fit=float(trend_min_fit),
+                trend_max_queries_per_trend=int(trend_max_queries),
+                desired_output_count=int(desired_output_count),
+                gemini_backend=gemini_backend,
+                gemini_model=gemini_model,
+                task5_token_path=task5_token_path,
+                task5_provider=task5_provider,
+                task5_max_images_per_query=int(task5_max_images_per_query),
+                task5_max_crawl_trends=int(task5_max_crawl_trends),
+                task5_max_downloads=int(task5_max_downloads),
+                task5_top_images=int(task5_top_images),
+                task5_vision_mode=task5_vision_mode,
+                task5_refresh_vision_cache=bool(task5_refresh_vision_cache),
+                crop_mode=str(crop_mode),
+                dedupe_threshold=int(dedupe_threshold),
+                remove_white_background=bool(remove_white),
+                export_cmyk=bool(export_cmyk),
+                design_mode=design_mode,
+                artwork_image_size=artwork_image_size,
+                enhancement_mode=enhancement_mode,
+                task4_mockup_engine="direct_ai",
+                task4_ai_limit=int(desired_output_count),
+                task4_variants_per_product=int(background_variants),
+            )
+            st.session_state["active_pipeline_config"] = config
+            active_run = start_crawl_and_review_run(config)
+            st.session_state["trend_product_active_run"] = active_run
+            st.rerun()
+
+else:
+    run_col, _ = st.columns([2, 3])
+    with run_col:
+        run_clicked = st.button("🚀 Find and build (1-Click Auto)", type="primary", disabled=bool(is_running))
+
+    if run_clicked:
+        if not trend_niche:
+            st.error("Enter a niche before starting Pinterest Trends discovery.")
+        else:
+            output_root = Path(output_root_text)
+            task5_token_path = Path(task5_token_path_text) if task5_token_path_text.strip() else None
+            config = PipelineConfig(
+                target=target,
+                output_root=output_root,
+                workflow_mode="trend_to_product",
+                trend_niche=trend_niche,
+                trend_region=trend_region,
+                trend_type=trend_type,
+                trend_interest=trend_interest,
+                trend_keyword_limit=int(trend_keyword_limit),
+                trend_max_trends=int(trend_max_trends),
+                trend_min_semantic_fit=float(trend_min_fit),
+                trend_max_queries_per_trend=int(trend_max_queries),
+                desired_output_count=int(desired_output_count),
+                gemini_backend=gemini_backend,
+                gemini_model=gemini_model,
+                task5_token_path=task5_token_path,
+                task5_provider=task5_provider,
+                task5_max_images_per_query=int(task5_max_images_per_query),
+                task5_max_crawl_trends=int(task5_max_crawl_trends),
+                task5_max_downloads=int(task5_max_downloads),
+                task5_top_images=int(task5_top_images),
+                task5_vision_mode=task5_vision_mode,
+                task5_refresh_vision_cache=bool(task5_refresh_vision_cache),
+                crop_mode=str(crop_mode),
+                dedupe_threshold=int(dedupe_threshold),
+                remove_white_background=bool(remove_white),
+                export_cmyk=bool(export_cmyk),
+                design_mode=design_mode,
+                artwork_image_size=artwork_image_size,
+                enhancement_mode=enhancement_mode,
+                task4_mockup_engine="direct_ai",
+                task4_ai_limit=int(desired_output_count),
+                task4_variants_per_product=int(background_variants),
+            )
+            st.session_state["active_pipeline_config"] = config
+            active_run = start_pipeline_run(config)
+            st.session_state["trend_product_active_run"] = active_run
+            st.rerun()
 
 if isinstance(active_run, dict):
-    run_status = str(active_run.get("status") or "running")
+    run_status = str(active_run.get("status") or "")
     logs = active_run.get("logs")
     if isinstance(logs, list) and logs:
         st.code("\n".join(str(line) for line in logs[-80:]), language="text")
 
     if run_status == "running":
-        st.info("Find and build is running. Stop cancels the current pipeline and Pinterest subprocesses.")
+        step_label = (
+            "Step 1: Crawling & Pre-screening"
+            if active_run.get("kind") == "crawl_and_review"
+            else ("Step 2: Production" if active_run.get("kind") == "production" else "Find and build")
+        )
+        st.info(f"{step_label} is running. Click Stop above if you need to cancel.")
         time.sleep(0.5)
         st.rerun()
     elif run_status == "cancelled":
-        st.warning(str(active_run.get("error") or "Find and build was stopped."))
+        st.warning(str(active_run.get("error") or "Process was stopped."))
     elif run_status == "failed":
         error_text = str(active_run.get("error") or "")
         st.error(error_text)
@@ -806,10 +1132,14 @@ if isinstance(active_run, dict):
             st.warning("Pinterest Trends API authentication failed. Check credentials/permissions and retry.")
         else:
             st.warning("The run stopped before completion. Check the log above and the run folder for details.")
-    else:
+    elif run_status == "review_ready":
+        pkg = active_run.get("package")
+        if pkg:
+            st.session_state["active_candidate_package"] = pkg
+    elif run_status == "complete":
         result = active_run.get("result")
         if result is not None:
-            st.success(f"Run folder: {result.run_dir}")
+            st.success(f"Production complete! Run folder: {result.run_dir}")
             st.caption(f"Report: {result.report_path}")
             design_previews = [path for path in result.final_images if path.suffix.lower() == ".png"]
             shown_count = min(int(preview_designs), len(design_previews))
@@ -825,6 +1155,18 @@ if isinstance(active_run, dict):
             for index, image_path in enumerate(design_previews[:shown_count]):
                 with cols[index % 3]:
                     st.image(str(image_path), caption=image_path.name, width="stretch")
+
+# Render active review UI if available
+active_pkg = st.session_state.get("active_candidate_package")
+if active_pkg and run_status in {"review_ready", "complete", ""}:
+    st.divider()
+    active_cfg = st.session_state.get("active_pipeline_config")
+    render_candidate_review_ui(
+        active_pkg,
+        config=active_cfg,
+        is_running=is_running,
+        key_prefix="active_review",
+    )
 
 st.divider()
 render_run_history(Path(output_root_text), int(preview_designs))

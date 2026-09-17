@@ -146,3 +146,6 @@ class RankedImage:
     flat_artwork_score: float = 0.0
     printability_score: float = 0.0
     requires_extraction: bool = False
+    classification: str = "Printable Artwork"
+    is_direct_printable: bool = False
+

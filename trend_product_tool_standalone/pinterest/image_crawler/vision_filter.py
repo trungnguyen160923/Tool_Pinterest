@@ -175,13 +175,23 @@ Return only JSON:
 }}
 
 For inspiration mode:
-- product_present means a usable visual inspiration is present.
-- product_role PRIMARY means the usable motif/artwork/pattern is the main subject.
+- product_present means a usable visual pattern/artwork is present.
+- product_role PRIMARY means the motif/artwork/pattern is the main subject.
 - product_visibility means motif/artwork clarity.
 - commercial_quality means print/ecommerce suitability.
-- Use reject_reason_code for strong rejections such as REJECT_TEXT_BLOCK, REJECT_LOGO, REJECT_WATERMARK, REJECT_IP_CHARACTER, REJECT_BLURRY, REJECT_ROOM_ONLY, REJECT_COLLAGE.
-- source_role is the downstream contract: artwork_source can be printed directly; style_reference is only for palette/style extraction; product_reference is an existing product; extraction_required needs foreground separation; reject is unusable.
-- A lifestyle scene with a clear motif is not artwork_source unless the image is already flat/isolated. Use extraction_required or style_reference instead.
+- Use reject_reason_code for strong rejections:
+  REJECT_HANDS_OR_NAILS (hands, nails, fingers, manicure),
+  REJECT_PHONE_WALLPAPER (phone frame, lockscreen clock, battery, status bar),
+  REJECT_3D_ROOM_SCENE (photo of 3D interior room with perspective tilt & furniture obscuring floor),
+  REJECT_TEXT_BLOCK (text quotes, word art, meme text),
+  REJECT_WATERMARK (copyright stamps, watermark across art),
+  REJECT_LOGO (brand logos),
+  REJECT_BLURRY (low resolution or illegible),
+  REJECT_COLLAGE (multi-image grid/moodboard).
+- flat_artwork_score: 1.0 = completely flat 2D graphic, vector, top-down seamless repeat; 0.0 = angled 3D photo or room interior.
+- printability_score: 1.0 = ready for POD direct printing onto rug/blanket; 0.0 = cluttered, dirty, occluded.
+- source_role: artwork_source can be printed directly; style_reference is only for palette/style; extraction_required needs foreground separation; reject is unusable.
+- A 3D room photo or angled lifestyle photo is NEVER artwork_source.
 
 Image metadata:
 {json.dumps(payload, ensure_ascii=False, indent=2)}

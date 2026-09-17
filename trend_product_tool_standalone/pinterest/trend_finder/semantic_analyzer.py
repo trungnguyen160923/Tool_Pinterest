@@ -33,6 +33,32 @@ VISUAL_TREND_TERMS = {
 }
 
 
+NON_TEXTILE_STOPWORDS_REGEX = re.compile(
+    r"\b("
+    r"nails?|acrylic\s+nails?|gel\s+nails?|nail\s+art|manicure|pedicure|"
+    r"hair|hairstyles?|haircuts?|hair\s+color|braids?|updo|"
+    r"makeup|lipsticks?|eyeshadow|mascara|lip\s+gloss|skincare|eyelashes?|eyebrows?|"
+    r"wallpapers?|lockscreens?|phone\s+cases?|iphone\s+wallpapers?|widgets?|home\s+screen|"
+    r"outfits?|ootd|shoes|sneakers|heels|dresses|tattoos?|piercings?|jewelry|"
+    r"quotes?|memes?|workout|gym|diet"
+    r")\b",
+    re.IGNORECASE,
+)
+
+
+def build_smart_queries(trend: str) -> list[QuerySpec]:
+    clean = trend.strip()
+    return [
+        QuerySpec(query=f"{clean} surface pattern design", intent="surface_pattern", priority=1),
+        QuerySpec(query=f"{clean} textile pattern flat", intent="textile_flat", priority=2),
+        QuerySpec(query=f"{clean} seamless pattern vector", intent="seamless_vector", priority=3),
+        QuerySpec(query=f"{clean} rug design illustration", intent="rug_illustration", priority=4),
+        QuerySpec(query=f"{clean} blanket pattern design", intent="blanket_pattern", priority=5),
+        QuerySpec(query=f"{clean} pattern", intent="pattern", priority=6),
+        QuerySpec(query=clean, intent="trend_raw", priority=7),
+    ]
+
+
 class GeminiSemanticAnalyzer:
     def __init__(
         self,
@@ -109,14 +135,14 @@ class GeminiSemanticAnalyzer:
             semantic_fit = 50.0
 
         trend = candidate.name
-        queries = [QuerySpec(query=trend, intent="trend", priority=1)]
+        queries = build_smart_queries(trend)
         return TrendPackageItem(
             trend_id="trend_" + candidate.candidate_id[:12],
             trend=trend,
             trend_strength=candidate.strength,
             relationship=relationship,
             semantic_fit=semantic_fit,
-            queries=queries[:5],
+            queries=queries[:6],
             reason="Heuristic fallback; retain the trend for image-level visual and printability review.",
             sources=[candidate.source],
             source_metrics=candidate.metrics,
@@ -136,28 +162,30 @@ class GeminiSemanticAnalyzer:
             for item in candidates
         ]
         return f"""
-You are the visual trend intelligence layer for a Pinterest-to-print design tool.
+You are the visual trend intelligence layer for a Print-on-Demand (POD) Home Textiles tool (Rugs, Blankets, Throws, Surface Prints).
 
-The eventual product format is not a restriction. Any visually rich trend can inspire a rug, blanket, or other textile print.
-Reference context only: {self.niche or "textile print"}
+Target product domain: Home Decor, Floor Coverings & Bedding Textiles (Rug & Blanket prints).
+Reference context / niche: {self.niche or "home decor textiles"}
 
 For each Pinterest trend candidate:
-1. Decide whether it has useful visual inspiration value.
+1. Decide whether it provides strong visual, motif, or pattern inspiration for home textiles (rugs, blankets, surface pattern design).
 2. Classify relationship as one of:
    DIRECT_PRODUCT, DESIGN_INSPIRATION, CONTEXTUAL_USE, AUDIENCE_ADJACENT, IRRELEVANT.
-3. Score semantic_fit on 0..100 using this rubric:
-   - visual_relevance: does the trend imply motifs, colors, patterns, textures, or a visual aesthetic?
-   - printability_potential: can those visual elements become a flat, repeatable, or full-bleed print?
-   - design_transferability: can the visual language be reinterpreted into original artwork?
-   Do not score down a trend merely because it comes from beauty, fashion, sports, food styling, or another category.
-   Reject only when the trend is clearly non-visual, text-first, service-oriented, or has no usable visual language.
-Important:
-- Do not accept random pop culture/person names unless there is a clear visual/product reason.
-- Keep borderline design aesthetics if they can transfer into product style, color, motif, texture, or room context.
-- Seasonal themes are valid when they have clear visual motifs.
-- Beauty, fashion, sports, and lifestyle trends are valid sources of visual inspiration when their imagery can transfer to print.
-- Do not require any product name to appear in the trend keyword.
-- Do not translate, rewrite, or generate search queries. The original Pinterest Trends API keyword is the crawl query.
+3. Score semantic_fit on 0..100:
+   - visual_relevance: does the trend have rich aesthetic motifs, color palettes, textures, or repeat patterns?
+   - printability_potential: can these visual elements be translated into a flat 2D surface pattern or direct print for rugs/blankets?
+   - design_transferability: can this motif be printed onto large textiles (area rugs, fleece/sherpa blankets)?
+
+REJECT explicitly (set reject=true and relationship=IRRELEVANT):
+- Beauty, nails, hair, makeup, skincare, cosmetics, manicures.
+- Phone wallpapers, lockscreens, device themes, tech icons.
+- Personal fashion outfits (OOTD, shoes, apparel styling).
+- Text-only memes, quotes, celebrity gossip, workout routines.
+- Trends without distinct visual motifs or surface patterns.
+
+PRIORITIZE:
+- Surface patterns (floral, botanical, geometric, checkerboard, plaid, abstract, boho, vintage, celestial, cottagecore, seasonal/holiday decor).
+- Textile prints, folk art, retro illustrations, tapestry designs.
 
 Return only JSON:
 {{
@@ -307,8 +335,12 @@ Candidates:
 
     @staticmethod
     def _hard_reject_reason(name: str) -> str:
-        # Keyword-level rejection is intentionally disabled. A source category
-        # is not a reliable proxy for the quality of the images it returns.
+        text = name.strip().lower()
+        if not text:
+            return "empty_trend_keyword"
+        match = NON_TEXTILE_STOPWORDS_REGEX.search(text)
+        if match:
+            return f"Matched non-home-textile stopword: '{match.group(0)}'"
         return ""
 
     def _item_from_raw(self, candidate: TrendCandidate, raw: dict[str, Any]) -> tuple[TrendPackageItem, bool]:
@@ -318,7 +350,7 @@ Candidates:
         semantic_fit = clamp(raw.get("semantic_fit"), default=0.0)
         reject = bool(raw.get("reject")) or relationship == "IRRELEVANT" or semantic_fit <= 0
 
-        queries = [QuerySpec(query=candidate.name, intent="trend", priority=1)]
+        queries = build_smart_queries(candidate.name)
 
         tags = raw.get("tags") or raw.get("semantic_tags") or []
         if not isinstance(tags, list):

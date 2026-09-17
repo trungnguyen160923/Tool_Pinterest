@@ -80,16 +80,20 @@ def policy_reject_reason(candidate: ImageCandidate, vision: VisionResult, policy
     return ""
 
 
-def score_image(candidate: ImageCandidate, vision: VisionResult) -> float:
+def score_image(candidate: ImageCandidate, vision: VisionResult, is_direct_printable: bool = False) -> float:
     score = (
-        candidate.trend_strength * 0.22
-        + candidate.semantic_fit * 0.14
-        + vision.product_visibility * 0.20
-        + vision.trend_relevance * 0.18
-        + vision.commercial_quality * 0.16
-        + vision.product_confidence * 100.0 * 0.06
-        + vision.confidence * 100.0 * 0.04
+        candidate.trend_strength * 0.20
+        + candidate.semantic_fit * 0.12
+        + vision.product_visibility * 0.18
+        + vision.trend_relevance * 0.16
+        + vision.commercial_quality * 0.14
+        + vision.product_confidence * 100.0 * 0.05
+        + vision.confidence * 100.0 * 0.05
+        + (vision.flat_artwork_score * 100.0 * 0.05)
+        + (vision.printability_score * 100.0 * 0.05)
     )
+    if is_direct_printable:
+        score += 8.0
     if vision.product_role == "SECONDARY":
         score *= 0.95
     if vision.product_role not in {"PRIMARY", "SECONDARY", "UNVERIFIED"}:
@@ -151,7 +155,25 @@ def rank_images(
         if vision is None:
             rejected.append({"image_id": candidate.image_id, "reason": "missing_vision_result"})
             continue
-        score = score_image(candidate, vision)
+
+        is_direct_printable = bool(
+            vision.flat_artwork_score >= 0.70
+            and vision.printability_score >= 0.65
+            and not vision.is_lifestyle_scene
+            and not vision.requires_extraction
+            and not vision.is_collage
+            and not bool(vision.reject_reason_code)
+        )
+        if vision.flat_artwork_score >= 0.75:
+            classification = "Flat Pattern"
+        elif vision.flat_artwork_score >= 0.55 or vision.printability_score >= 0.65:
+            classification = "Printable Artwork"
+        elif vision.printability_score >= 0.45:
+            classification = "Texture/Inspiration"
+        else:
+            classification = "3D Scene/Photo"
+
+        score = score_image(candidate, vision, is_direct_printable=is_direct_printable)
         reject_reason = (
             inspiration_reject_reason(candidate, vision, policy)
             if inspiration_mode
@@ -183,6 +205,8 @@ def rank_images(
                     "motifs": vision.motifs,
                     "detected_product": vision.detected_product,
                     "source_role": vision.source_role,
+                    "classification": classification,
+                    "is_direct_printable": is_direct_printable,
                 }
             )
             continue
@@ -221,6 +245,8 @@ def rank_images(
                 flat_artwork_score=vision.flat_artwork_score,
                 printability_score=vision.printability_score,
                 requires_extraction=vision.requires_extraction,
+                classification=classification,
+                is_direct_printable=is_direct_printable,
             )
         )
     ranked.sort(key=lambda item: item.image_score, reverse=True)

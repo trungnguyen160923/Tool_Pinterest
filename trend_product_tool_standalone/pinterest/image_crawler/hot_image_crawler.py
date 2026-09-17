@@ -18,7 +18,7 @@ if __package__ in {None, ""}:
     from pinterest.shared.cache import JsonCache
     from pinterest.shared.models import ImageCandidate, RankedImage, SearchResult
     from pinterest.shared.product_policy import generate_product_policy
-    from pinterest.shared.utils import configure_logging, dataclass_to_dict, env, html_page, utc_now_iso, write_csv, write_json
+    from pinterest.trend_finder.semantic_analyzer import build_smart_queries
 else:
     from .dedupe import dedupe_candidates
     from .discovery import load_trend_package, provider_from_name
@@ -29,6 +29,7 @@ else:
     from ..shared.models import ImageCandidate, RankedImage, SearchResult
     from ..shared.product_policy import generate_product_policy
     from ..shared.utils import configure_logging, dataclass_to_dict, env, html_page, utc_now_iso, write_csv, write_json
+    from ..trend_finder.semantic_analyzer import build_smart_queries
 
 
 LOG = logging.getLogger("pinterest.crawler")
@@ -58,7 +59,10 @@ def collect_results(
     results: list[SearchResult] = []
 
     for trend in package.trends[:max_trends]:
-        for query in sorted(trend.queries, key=lambda item: item.priority)[:max_queries_per_trend]:
+        trend_queries = list(trend.queries)
+        if not any("pattern" in q.query.lower() or "textile" in q.query.lower() for q in trend_queries):
+            trend_queries = build_smart_queries(trend.trend)
+        for query in sorted(trend_queries, key=lambda item: item.priority)[:max_queries_per_trend]:
             LOG.info("Search: [%s] %s", trend.trend_id, query.query)
             try:
                 found = provider.search(

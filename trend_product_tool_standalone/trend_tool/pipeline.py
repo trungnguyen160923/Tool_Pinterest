@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
@@ -56,6 +56,49 @@ class PipelineResult:
     mockups: list[Path]
 
 
+@dataclass(frozen=True)
+class CandidateReviewItem:
+    image_id: str
+    local_path: str
+    image_url: str
+    pin_url: str
+    pin_id: str
+    trend: str
+    query: str
+    image_score: float
+    flat_artwork_score: float
+    printability_score: float
+    classification: str
+    is_direct_printable: bool
+    recommended: bool
+    width: int | None
+    height: int | None
+    reason: str
+    motifs: list[str]
+    source_role: str
+
+    def to_dict(self) -> dict[str, object]:
+        return asdict(self)
+
+
+@dataclass(frozen=True)
+class CandidateReviewPackage:
+    run_dir: Path
+    candidates: list[CandidateReviewItem]
+    trend_package_path: Path
+    crawl_dir: Path
+    config: PipelineConfig
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "run_dir": str(self.run_dir),
+            "trend_package_path": str(self.trend_package_path),
+            "crawl_dir": str(self.crawl_dir),
+            "candidate_count": len(self.candidates),
+            "candidates": [c.to_dict() for c in self.candidates],
+        }
+
+
 def write_resilient_report(
     path: Path,
     config: PipelineConfig,
@@ -94,6 +137,23 @@ def run_pipeline(
 
     progress = guarded_progress
     log(progress, "Starting product workflow.")
+
+    mode = normalize_key(config.workflow_mode)
+    if mode in {"trend_to_product", "auto", "default", ""}:
+        package = run_crawl_and_review_stage(config, progress=progress, cancel_event=cancel_event)
+        selected = [c for c in package.candidates if c.recommended]
+        if not selected:
+            selected = package.candidates[: max(1, config.desired_output_count)]
+        if not selected:
+            raise RuntimeError("No candidate images passed crawl & review.")
+        return run_production_from_candidates(
+            selected_items=selected,
+            config=config,
+            run_dir=package.run_dir,
+            progress=progress,
+            cancel_event=cancel_event,
+        )
+
     run_dir = make_run_dir(config.output_root)
     log(progress, f"Created run folder: {run_dir}")
     kept_dir = run_dir / "dedupe" / "kept"
@@ -365,13 +425,166 @@ def make_run_dir(output_root: Path) -> Path:
     return run_dir
 
 
-def run_trend_to_product_pipeline(
+def run_crawl_and_review_stage(
     config: PipelineConfig,
-    run_dir: Path,
-    kept: list[CandidateImage],
-    decisions: list[DedupeDecision],
+    run_dir: Path | None = None,
     progress: ProgressLogger | None = None,
+    cancel_event: Event | None = None,
+) -> CandidateReviewPackage:
+    base_progress = progress
+
+    def guarded_progress(message: str) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise PipelineCancelled("Crawl and review stage was stopped by the user.")
+        if base_progress:
+            base_progress(message)
+
+    progress = guarded_progress
+    log(progress, "Starting Step 1: Crawl & AI Vision Pre-screening.")
+    if run_dir is None:
+        run_dir = make_run_dir(config.output_root)
+    log(progress, f"Run folder: {run_dir}")
+
+    config, task5_candidates = prepare_discovery(config, run_dir, progress, cancel_event=cancel_event)
+    write_json(run_dir / "config.json", asdict(config))
+
+    log(progress, f"Collected {len(task5_candidates)} crawled image(s).")
+    if not task5_candidates:
+        review_manifest = {
+            "status": "failed",
+            "reason": "no_candidate_images",
+            "message": "No candidate images were collected. Check Pinterest crawler logs and network/login access.",
+            "candidates": [],
+        }
+        write_json(run_dir / "candidate_review.json", review_manifest)
+        raise RuntimeError(review_manifest["message"])
+
+    filtered, filter_decisions = filter_candidates(task5_candidates)
+    kept, dedupe_decisions = dedupe_candidates(filtered, config.dedupe_threshold)
+    decisions = filter_decisions + dedupe_decisions
+
+    kept_dir = run_dir / "dedupe" / "kept"
+    rejected_dir = run_dir / "dedupe" / "rejected"
+    copy_decision_files(decisions, kept_dir, rejected_dir)
+
+    review_candidates: list[CandidateReviewItem] = []
+    for candidate in kept:
+        meta = candidate.metadata or {}
+        image_id = str(meta.get("image_id") or candidate.path.stem)
+        flat_artwork_score = float(meta.get("flat_artwork_score") or 0.0)
+        printability_score = float(meta.get("printability_score") or 0.0)
+        is_direct = bool(meta.get("is_direct_printable", False))
+        if not is_direct and flat_artwork_score >= 0.70 and printability_score >= 0.65:
+            is_direct = True
+        classification = str(
+            meta.get("classification")
+            or ("Flat Pattern" if flat_artwork_score >= 0.75 else "Printable Artwork")
+        )
+        score = float(meta.get("image_score") or 0.0)
+        review_candidates.append(
+            CandidateReviewItem(
+                image_id=image_id,
+                local_path=str(candidate.path.resolve()),
+                image_url=str(meta.get("image_url") or ""),
+                pin_url=str(meta.get("pin_url") or ""),
+                pin_id=str(meta.get("pin_id") or ""),
+                trend=str(meta.get("trend") or candidate.keyword),
+                query=str(meta.get("query") or candidate.keyword),
+                image_score=score,
+                flat_artwork_score=flat_artwork_score,
+                printability_score=printability_score,
+                classification=classification,
+                is_direct_printable=is_direct,
+                recommended=False,
+                width=int(meta.get("width") or 0) or None,
+                height=int(meta.get("height") or 0) or None,
+                reason=str(meta.get("reason") or ""),
+                motifs=list(meta.get("motifs") or []),
+                source_role=str(candidate.source_role or meta.get("source_role") or "unknown"),
+            )
+        )
+
+    # Sort review candidates by direct printability first, then image score
+    review_candidates.sort(key=lambda c: (1 if c.is_direct_printable else 0, c.image_score), reverse=True)
+
+    # Pre-select top candidates up to desired_output_count
+    recommended_count = min(len(review_candidates), max(1, config.desired_output_count))
+    final_review_candidates: list[CandidateReviewItem] = []
+    for idx, c in enumerate(review_candidates):
+        is_rec = idx < recommended_count
+        final_review_candidates.append(replace(c, recommended=is_rec))
+
+    review_manifest = {
+        "status": "ready_for_review",
+        "run_dir": str(run_dir),
+        "target_product": config.target.name,
+        "target_size": f"{config.target.width_px}x{config.target.height_px}",
+        "niche": config.trend_niche,
+        "total_candidates": len(final_review_candidates),
+        "direct_printable_count": sum(1 for c in final_review_candidates if c.is_direct_printable),
+        "candidates": [c.to_dict() for c in final_review_candidates],
+    }
+    write_json(run_dir / "candidate_review.json", review_manifest)
+    log(progress, f"Step 1 Complete: {len(final_review_candidates)} candidate(s) ready for review ({review_manifest['direct_printable_count']} direct printable).")
+
+    return CandidateReviewPackage(
+        run_dir=run_dir,
+        candidates=final_review_candidates,
+        trend_package_path=run_dir / "task5_trends" / "trend_package.json",
+        crawl_dir=run_dir / "task5_crawl",
+        config=config,
+    )
+
+
+def run_production_from_candidates(
+    selected_items: list[Path | str | dict | CandidateReviewItem | CandidateImage],
+    config: PipelineConfig,
+    run_dir: Path | None = None,
+    progress: ProgressLogger | None = None,
+    cancel_event: Event | None = None,
 ) -> PipelineResult:
+    base_progress = progress
+
+    def guarded_progress(message: str) -> None:
+        if cancel_event is not None and cancel_event.is_set():
+            raise PipelineCancelled("Production was stopped by the user.")
+        if base_progress:
+            base_progress(message)
+
+    progress = guarded_progress
+    log(progress, f"Starting Step 2: Production for {len(selected_items)} selected image(s).")
+    if run_dir is None:
+        run_dir = make_run_dir(config.output_root)
+    log(progress, f"Production folder: {run_dir}")
+
+    # Resolve candidate image paths and metadata
+    resolved_sources: list[tuple[Path, str, dict[str, object]]] = []
+    for item in selected_items:
+        if isinstance(item, CandidateReviewItem):
+            path = Path(item.local_path)
+            keyword = item.query or item.trend
+            meta = item.to_dict()
+        elif isinstance(item, CandidateImage):
+            path = item.path
+            keyword = item.keyword
+            meta = item.metadata or {}
+        elif isinstance(item, dict):
+            raw_path = str(item.get("local_path") or item.get("path") or "")
+            path = Path(raw_path)
+            keyword = str(item.get("query") or item.get("trend") or item.get("keyword") or path.stem)
+            meta = dict(item)
+        elif isinstance(item, (str, Path)):
+            path = Path(item)
+            keyword = path.stem
+            meta = {"local_path": str(path)}
+        else:
+            continue
+        if path.exists() and path.is_file():
+            resolved_sources.append((path, keyword, meta))
+
+    if not resolved_sources:
+        raise RuntimeError("No valid candidate images provided for production.")
+
     design_dir = run_dir / "artwork_designs"
     enhanced_dir = run_dir / "enhanced"
     cropped_dir = run_dir / "cropped"
@@ -380,6 +593,11 @@ def run_trend_to_product_pipeline(
     rendered_mask_dir = run_dir / "rendered_product_masks"
     product_cutout_dir = run_dir / "product_cutouts"
     mockup_dir = run_dir / "mockups"
+    lifestyle_dir = run_dir / "lifestyle_mockups"
+    for d in (design_dir, enhanced_dir, cropped_dir, final_dir, rendered_product_dir, rendered_mask_dir, product_cutout_dir, mockup_dir, lifestyle_dir):
+        d.mkdir(parents=True, exist_ok=True)
+
+    write_json(run_dir / "production_config.json", asdict(config))
 
     final_images: list[Path] = []
     final_pngs: list[Path] = []
@@ -387,113 +605,53 @@ def run_trend_to_product_pipeline(
     rendered_masks: dict[Path, Path] = {}
     design_records = []
     enhancement_records = []
-    product_render_records: list[ProductRenderRecord] = []
-    product_asset_records = []
-    product_cutout_records = []
-    candidate_printability_records = []
-    final_printability_records = []
-    generated_printability_records = []
     artwork_generation_records = []
+    product_render_records = []
+    product_asset_records = []
     rug_shape_records = []
+    template_mockup_records = []
+    mockup_quality_records = []
     render_target_by_print: dict[str, object] = {}
 
-    processable: list[tuple[CandidateImage, dict[str, object]]] = []
-    for candidate in kept:
-        log(progress, f"Assessing {candidate.path.name} as a reusable print-art reference.")
-        decision = assess_candidate(
-            candidate,
-            config.target,
-            backend=config.gemini_backend,
-            model=config.gemini_model,
-        )
-        candidate_printability_records.append(decision.to_dict())
-        if decision.accepted:
-            processable.append((candidate, reference_design_brief(decision.assessment)))
-            continue
-        log(progress, f"Skipping {candidate.path.name}: {decision.reason}")
-    kept = processable
-    if not kept:
-        stage_manifest = {
-            "status": "failed",
-            "reason": "no_candidates_passed_printability",
-            "candidate_printability_records": candidate_printability_records,
-            "final_printability_records": [],
-            "design_records": [],
-            "enhancement_records": [],
-            "task3_results": [],
-            "task4_results": [],
-        }
-        write_json(run_dir / "stage_manifest.json", stage_manifest)
-        write_resilient_report(run_dir / "report.html", config, decisions, [], [], stage_manifest)
-        raise RuntimeError("No crawled images passed the candidate printability gate.")
+    is_direct_mode = normalize_key(config.design_mode) in {"direct", "direct_print", "product_design"}
 
-    desired_outputs = max(1, config.desired_output_count)
-    # Artwork generation can reject otherwise useful references. After the first
-    # pass, revisit the approved references with an explicitly different design
-    # direction so the requested output count is a real recovery target.
-    recovery_rounds = max(1, min(3, desired_outputs))
-    work_items = [
-        (candidate, design_brief, round_index)
-        for round_index in range(1, recovery_rounds + 1)
-        for candidate, design_brief in kept
-    ]
-    for index, (candidate, design_brief, source_round) in enumerate(work_items, start=1):
+    for index, (source_path, keyword, meta) in enumerate(resolved_sources, start=1):
+        if cancel_event is not None and cancel_event.is_set():
+            raise PipelineCancelled("Production was stopped by the user.")
+
         base = f"{config.target.name}_{index:03d}"
-        phase = "Recovery" if source_round > 1 else "Primary"
-        log(progress, f"[{index}/{len(work_items)}] {phase}: converting trend image into printable artwork.")
-        design_source = candidate.path
-        design_mode = config.design_mode
-        if normalize_key(config.design_mode) == "ai_artwork":
-            design_source = None
-            variation_instruction = (
-                "Create a clearly different flat textile composition from the same inspiration. "
-                "Change motif arrangement, scale, and repeat rhythm; do not recreate an earlier output. "
-                "Keep it a clean, flat, full-bleed graphic with no room, product, perspective, or shadows."
-                if source_round > 1
-                else ""
+        log(progress, f"[{index}/{len(resolved_sources)}] Processing design from {source_path.name}.")
+
+        design_source = source_path
+        applied_design_mode = "direct"
+
+        if not is_direct_mode:
+            generated_path = run_dir / "generated_artwork" / f"{base}_gemini.png"
+            generated_path.parent.mkdir(parents=True, exist_ok=True)
+            log(progress, f"[{index}/{len(resolved_sources)}] Generating flat artwork with Gemini from reference.")
+            generation = generate_flat_artwork(
+                source_path,
+                generated_path,
+                config.target,
+                backend=config.gemini_backend,
+                image_size=config.artwork_image_size,
             )
-            correction = variation_instruction
-            for generation_attempt in range(1, 3):
-                generated_path = run_dir / "generated_artwork" / f"{base}_attempt_{generation_attempt}.png"
-                log(progress, f"[{index}/{len(work_items)}] Generating flat artwork with Gemini (attempt {generation_attempt}/2).")
-                generation = generate_flat_artwork(
-                    candidate.path,
-                    generated_path,
-                    config.target,
-                    backend=config.gemini_backend,
-                    image_size=config.artwork_image_size,
-                    reference_brief=design_brief,
-                    correction=correction,
-                )
-                artwork_generation_records.append(generation.to_dict())
-                if generation.status != "ok" or generation.output_path is None:
-                    correction = generation.notes
-                    log(progress, f"[{index}/{len(work_items)}] Gemini artwork generation failed: {generation.notes}")
-                    continue
-                generated_decision = assess_generated_artwork(
-                    generation.output_path,
-                    config.target,
-                    backend=config.gemini_backend,
-                    model=config.gemini_model,
-                )
-                generated_printability_records.append(generated_decision.to_dict())
-                if generated_decision.accepted:
-                    design_source = generation.output_path
-                    break
-                correction = " ".join(part for part in (variation_instruction, generated_decision.reason) if part)
-                log(progress, f"[{index}/{len(work_items)}] Rejecting generated artwork: {generated_decision.reason}")
-            if design_source is None:
-                continue
-            design_mode = "direct"
+            artwork_generation_records.append(generation.to_dict())
+            if generation.status == "ok" and generation.output_path and generation.output_path.exists():
+                design_source = generation.output_path
+            else:
+                log(progress, f"[{index}/{len(resolved_sources)}] Gemini redraw failed; using original image directly.")
+                design_source = source_path
+
         design_record = make_print_design(
             design_source,
             design_dir / f"{base}_artwork.png",
             config.target,
-            design_mode,
+            applied_design_mode,
         )
         design_records.append(design_record.to_dict())
 
-        log(progress, f"[{index}/{len(work_items)}] Enhancing artwork for print.")
+        log(progress, f"[{index}/{len(resolved_sources)}] Enhancing/upscaling for print.")
         enhancement_record = enhance_for_print(
             design_record.output_path,
             enhanced_dir / f"{base}_enhanced.png",
@@ -504,293 +662,183 @@ def run_trend_to_product_pipeline(
 
         source_for_crop = enhancement_record.output_path
         if config.remove_white_background:
-            log(progress, f"[{index}/{len(work_items)}] Removing near-white print background.")
-            source_for_crop = remove_near_white_background(enhancement_record.output_path, enhanced_dir / f"{base}_transparent.png")
-        log(progress, f"[{index}/{len(work_items)}] Preparing print canvas {config.target.width_px}x{config.target.height_px}.")
+            log(progress, f"[{index}/{len(resolved_sources)}] Removing near-white background.")
+            source_for_crop = remove_near_white_background(
+                enhancement_record.output_path,
+                enhanced_dir / f"{base}_transparent.png",
+            )
+
+        log(progress, f"[{index}/{len(resolved_sources)}] Fitting canvas to {config.target.width_px}x{config.target.height_px} ({config.crop_mode}).")
         cropped = fit_to_target(
             source_for_crop,
             cropped_dir / f"{base}_{config.target.width_px}x{config.target.height_px}.png",
             config.target,
             config.crop_mode,
         )
-        log(progress, f"[{index}/{len(work_items)}] Checking final artwork printability.")
-        final_decision = assess_final_artwork(
-            cropped,
-            design_source,
-            config.target,
-            backend=config.gemini_backend,
-            model=config.gemini_model,
-            require_repeat_seams=design_mode == "pattern_repeat",
-        )
-        final_printability_records.append(final_decision.to_dict())
-        if not final_decision.accepted:
-            log(progress, f"[{index}/{len(work_items)}] Rejecting final artwork: {final_decision.reason}")
-            continue
-        log(progress, f"[{index}/{len(work_items)}] Exporting approved print file.")
+
         final_png = final_dir / f"{base}_{config.target.width_px}x{config.target.height_px}_{config.target.dpi}dpi_rgb.png"
-        final_png.parent.mkdir(parents=True, exist_ok=True)
         final_png.write_bytes(cropped.read_bytes())
         final_images.append(final_png)
         final_pngs.append(final_png)
-        if config.export_cmyk:
-            log(progress, f"[{index}/{len(work_items)}] Exporting CMYK print JPG.")
-            final_images.append(
-                export_cmyk_jpg(
-                    final_png,
-                    final_dir / f"{base}_{config.target.width_px}x{config.target.height_px}_{config.target.dpi}dpi_cmyk.jpg",
-                    config.target.dpi,
-                )
-            )
 
-        log(progress, f"[{index}/{len(work_items)}] Rendering {config.target.name} product from artwork.")
+        if config.export_cmyk:
+            log(progress, f"[{index}/{len(resolved_sources)}] Exporting CMYK print JPG.")
+            cmyk_path = final_dir / f"{base}_{config.target.width_px}x{config.target.height_px}_{config.target.dpi}dpi_cmyk.jpg"
+            final_images.append(export_cmyk_jpg(final_png, cmyk_path, config.target.dpi))
+
         render_target = config.target
         if config.target.name.strip().lower() == "rug":
-            shape_decision = recommend_rug_shape(
-                final_png,
-                config.target,
-                backend=config.gemini_backend,
-                model=config.gemini_model,
-            )
-            render_target = replace(config.target, rug_shape=shape_decision.shape)
-            rug_shape_records.append({"print_path": final_png, **shape_decision.to_dict()})
-            log(progress, f"[{index}/{len(work_items)}] AI selected {shape_decision.shape} rug ({shape_decision.confidence:.0f}%): {shape_decision.reason}")
-        render_target_by_print[path_key(final_png)] = render_target
-        render_record = render_product_from_print(
-            source_path=candidate.path,
-            print_path=final_png,
-            product_path=rendered_product_dir / f"{base}_product.png",
-            mask_path=rendered_mask_dir / f"{base}_mask.png",
-            target=render_target,
-        )
-        product_render_records.append(render_record)
-        rendered_products.append(render_record.product_path)
-        rendered_masks[render_record.product_path] = render_record.mask_path
-        product_asset_records.append(
-            {
-                "source_path": candidate.path,
-                "asset_path": render_record.product_path,
-                "mask_path": render_record.mask_path,
-                "profile_path": None,
-                "status": "accepted",
-                "reason": "rendered_from_trend_artwork",
-                "profile": {
-                    "product_label": f"{render_target.rug_shape} rug" if render_target.name == "rug" else render_target.name,
-                    "workflow_mode": "trend_to_product",
-                    "artwork_path": design_record.output_path,
-                    "final_print_path": final_png,
-                    "source_keyword": candidate.keyword,
-                },
-                "metrics": {
-                    "width": render_record.width,
-                    "height": render_record.height,
-                },
-            }
-        )
-
-        if len(final_pngs) >= desired_outputs:
-            log(progress, f"Reached desired output count ({config.desired_output_count}).")
-            break
-
-    if len(final_pngs) < desired_outputs:
-        log(
-            progress,
-            f"Output recovery exhausted: approved {len(final_pngs)}/{desired_outputs} after "
-            f"{len(work_items)} controlled source attempts.",
-        )
-
-    if not final_pngs:
-        stage_manifest = {
-            "status": "failed",
-            "reason": "no_artwork_passed_final_printability",
-            "candidate_printability_records": candidate_printability_records,
-            "final_printability_records": final_printability_records,
-            "generated_printability_records": generated_printability_records,
-            "artwork_generation_records": artwork_generation_records,
-            "design_records": design_records,
-            "enhancement_records": enhancement_records,
-            "task3_results": [],
-            "task4_results": [],
-        }
-        write_json(run_dir / "stage_manifest.json", stage_manifest)
-        write_resilient_report(run_dir / "report.html", config, decisions, [], [], stage_manifest)
-        raise RuntimeError("No printable artwork was generated. Check Gemini artwork generation records in stage_manifest.json.")
-
-    mockups: list[Path] = []
-    if final_pngs:
-        log(progress, "Rendering local product mockups from the first print file.")
-        mockups = make_product_mockups(final_pngs[0], mockup_dir, config.target, config.mockup_count)
-
-    if rendered_products:
-        product_cutout_records = copy_product_cutouts(
-            rendered_products,
-            product_cutout_dir,
-            source_label="rendered_product",
-        )
-
-    task4_results = []
-    task4_skipped_records = []
-    ai_background_final_records = []
-    mockup_quality_records = []
-    template_mockup_records = []
-    if config.task4_mockup_engine in {"blender_3d", "direct_ai", "template_ai"} and config.task4_ai_limit > 0:
-        source_prints = final_pngs[: config.task4_ai_limit]
-        variants_per_product = max(1, config.task4_variants_per_product)
-        blender_render = config.task4_mockup_engine == "blender_3d"
-        direct_render = config.task4_mockup_engine == "direct_ai"
-        action = (
-            "Rendering deterministic Blender 3D product scenes from approved artwork"
-            if blender_render
-            else "Rendering direct AI lifestyle photographs from approved artwork"
-            if direct_render
-            else "Generating AI blank-product templates and compositing approved artwork locally"
-        )
-        total_mockups = len(source_prints) * variants_per_product
-        log(progress, f"{action} for {len(source_prints)} print file(s), {variants_per_product} view(s) each ({total_mockups} total).")
-        completed_mockups = 0
-        for product_index, print_path in enumerate(source_prints, start=1):
-            render_target = render_target_by_print.get(path_key(print_path), config.target)
-            for variant in range(1, variants_per_product + 1):
-                completed_mockups += 1
-                # Every product receives the same predictable listing-shot set.
-                pose = template_pose_for_index(render_target, variant)
-                label = "Blender 3D mockup" if blender_render else "Direct AI mockup" if direct_render else "Template mockup"
-                log(progress, f"{label} {completed_mockups}/{total_mockups} for {print_path.name}, view {variant}/{variants_per_product} ({pose.name}).")
-                if blender_render:
-                    record = build_blender_mockup(print_path, run_dir, render_target, pose=pose, variant=variant, progress=progress)
-                else:
-                    builder = build_direct_ai_mockup if direct_render else build_template_mockup
-                    record = builder(
-                        print_path,
-                        run_dir,
-                        render_target,
-                        backend=config.gemini_backend,
-                        model=config.template_mockup_model,
-                        quality_model=config.gemini_model,
-                        attempts=max(1, config.task4_quality_attempts),
-                        pose=pose,
-                        variant=variant,
-                    )
-                template_mockup_records.append(record.to_dict())
-                quality = record.metrics.get("mockup_quality") if isinstance(record.metrics, dict) else None
-                if isinstance(quality, dict):
-                    mockup_quality_records.append({
-                        "print_path": print_path,
-                        "pose": pose.name,
-                        "variant": variant,
-                        "generation_attempt": record.metrics.get("generation_attempt"),
-                        **quality,
-                    })
-                if record.status == "ok" and record.mockup_path:
-                    mockups.append(record.mockup_path)
-                else:
-                    log(progress, f"Skipping {label.lower()} view {variant} for {print_path.name}: {record.notes}")
-        ai_background_final_records = template_mockup_records
-    elif config.task4_mockup_engine == "task4_ai" and config.task4_ai_limit > 0:
-        source_products = rendered_products[: config.task4_ai_limit]
-        log(progress, f"Running AI background replacement for {len(source_products)} rendered product(s).")
-        accepted_task4_results: list[Task4MockupResult] = []
-        all_task4_results: list[Task4MockupResult] = []
-        mockup_profile = mockup_profile_for_target(config.target)
-        base_task4_config = task4_config(config, run_dir / "task4_mockups", mockup_profile)
-        max_mockup_attempts = max(1, config.task4_quality_attempts)
-        for product in source_products:
-            feedback = ""
-            for attempt in range(1, max_mockup_attempts + 1):
-                background = base_task4_config.background
-                if feedback:
-                    background += (
-                        "\nQUALITY RETRY REQUIREMENT: The previous mockup was rejected. "
-                        f"{feedback} {mockup_profile.prompt_contract()} Preserve the exact original product artwork. "
-                        "Do not change the product type, material, scale, or intended pose. "
-                        "Use a different believable scene composition if needed."
-                    )
-                attempt_config = replace(base_task4_config, background=background)
-                log(progress, f"AI background for {product.name}: attempt {attempt}/{max_mockup_attempts}.")
-                result = run_one_task4_mockup(product, attempt_config, progress, rendered_masks.get(product))
-                all_task4_results.append(result)
-                output_candidates = task4_background_final_outputs([result])
-                if result.status != "ok" or not output_candidates:
-                    feedback = result.notes or "The previous background replacement did not produce a usable final image."
-                    mockup_quality_records.append({
-                        "product_path": product,
-                        "attempt": attempt,
-                        "accepted": False,
-                        "reason": feedback,
-                        "output_path": None,
-                    })
-                    continue
-                quality = assess_product_mockup(
-                    product,
-                    output_candidates[0],
+            try:
+                shape_decision = recommend_rug_shape(
+                    final_png,
                     config.target,
-                    mockup_profile,
                     backend=config.gemini_backend,
                     model=config.gemini_model,
                 )
-                mockup_quality_records.append({
-                    "product_path": product,
-                    "attempt": attempt,
-                    "output_path": output_candidates[0],
-                    **quality.to_dict(),
-                })
-                if quality.accepted:
-                    accepted_task4_results.append(result)
-                    break
-                feedback = quality.reason
-                log(progress, f"Rejecting AI background for {product.name}: {quality.reason}")
-        task4_results = [result.to_dict() for result in all_task4_results]
-        task4_failed = [result for result in all_task4_results if result.status != "ok"]
-        if task4_failed:
-            log(progress, f"AI background replacement failed for {len(task4_failed)} attempt(s).")
-        for result in accepted_task4_results:
-            mockups.extend(result.outputs)
-        log(progress, "Preparing AI background lifestyle assets.")
-        ai_final_paths, ai_background_final_records = prepare_ai_background_assets(
-            accepted_task4_results,
-            config,
-            run_dir,
-            progress,
-        )
-        # Lifestyle mockups are previews/listing assets, never print masters.
+                render_target = replace(config.target, rug_shape=shape_decision.shape)
+                rug_shape_records.append({"print_path": final_png, **shape_decision.to_dict()})
+                log(progress, f"[{index}/{len(resolved_sources)}] Rug shape: {shape_decision.shape}.")
+            except Exception as shape_exc:
+                log(progress, f"Rug shape recommendation skipped: {shape_exc}")
 
-    task3_results = []
-    if final_pngs and config.task3_reference_dir and config.task3_output_limit > 0:
-        log(progress, f"Running AI artwork replacement for {config.task3_output_limit} design(s).")
-        task3_results_raw = run_task3_replacements(final_pngs, task3_config(config, run_dir / "task3_replacements"))
-        task3_results = [result.to_dict() for result in task3_results_raw]
+        render_target_by_print[path_key(final_png)] = render_target
+        try:
+            render_record = render_product_from_print(
+                source_path=source_path,
+                print_path=final_png,
+                product_path=rendered_product_dir / f"{base}_product.png",
+                mask_path=rendered_mask_dir / f"{base}_mask.png",
+                target=render_target,
+            )
+            product_render_records.append(render_record)
+            rendered_products.append(render_record.product_path)
+            rendered_masks[render_record.product_path] = render_record.mask_path
+            product_asset_records.append(
+                {
+                    "source_path": source_path,
+                    "asset_path": render_record.product_path,
+                    "mask_path": render_record.mask_path,
+                    "status": "accepted",
+                    "reason": "rendered_from_trend_artwork",
+                }
+            )
+        except Exception as render_exc:
+            log(progress, f"Product render skipped: {render_exc}")
+
+    product_cutout_records = []
+    if rendered_products:
+        product_cutout_records = copy_product_cutouts(rendered_products, product_cutout_dir, source_label="rendered_product")
+
+    # Mockups rendering
+    mockups: list[Path] = []
+    ai_background_final_records: list[dict[str, object]] = []
+    if final_pngs:
+        log(progress, "Rendering local product mockups.")
+        mockups.extend(make_product_mockups(final_pngs[0], mockup_dir, config.target, count=config.mockup_count))
+
+        if config.task4_mockup_engine in {"blender_3d", "direct_ai", "template_ai"} and config.task4_ai_limit > 0:
+            source_prints = final_pngs[: config.task4_ai_limit]
+            variants_per_product = max(1, config.task4_variants_per_product)
+            blender_render = config.task4_mockup_engine == "blender_3d"
+            direct_render = config.task4_mockup_engine == "direct_ai"
+            for p_idx, print_file in enumerate(source_prints, start=1):
+                cur_target = render_target_by_print.get(path_key(print_file), config.target)
+                for var_idx in range(1, variants_per_product + 1):
+                    pose = template_pose_for_index(cur_target, var_idx)
+                    try:
+                        if blender_render:
+                            rec = build_blender_mockup(print_file, run_dir, cur_target, pose=pose, variant=var_idx, progress=progress)
+                        elif direct_render:
+                            rec = build_direct_ai_mockup(
+                                print_file,
+                                run_dir,
+                                cur_target,
+                                pose=pose,
+                                variant=var_idx,
+                                backend=config.gemini_backend,
+                                model=config.template_mockup_model,
+                                quality_model=config.gemini_model,
+                                attempts=max(1, config.task4_quality_attempts),
+                                progress=progress,
+                            )
+                        else:
+                            rec = build_template_mockup(
+                                print_file,
+                                run_dir,
+                                cur_target,
+                                backend=config.gemini_backend,
+                                model=config.template_mockup_model,
+                                quality_model=config.gemini_model,
+                                attempts=max(1, config.task4_quality_attempts),
+                                pose=pose,
+                                variant=var_idx,
+                            )
+                        template_mockup_records.append(rec.to_dict())
+                        if rec.status == "ok" and rec.mockup_path and rec.mockup_path.exists():
+                            mockups.append(rec.mockup_path)
+                            lifestyle_copy = lifestyle_dir / f"{cur_target.name}_{p_idx:03d}_lifestyle_{var_idx}.png"
+                            lifestyle_copy.write_bytes(rec.mockup_path.read_bytes())
+                            ai_background_final_records.append({
+                                "source_path": rec.mockup_path,
+                                "lifestyle_path": lifestyle_copy,
+                                "asset_type": "lifestyle_mockup",
+                                "status": "ok",
+                            })
+                    except Exception as mock_exc:
+                        log(progress, f"Mockup view {var_idx} skipped: {mock_exc}")
 
     stage_manifest = {
+        "status": "completed",
         "workflow_mode": "trend_to_product",
+        "design_mode": config.design_mode,
+        "selected_candidates_count": len(resolved_sources),
+        "final_images_count": len(final_images),
+        "mockups_count": len(mockups),
         "design_records": design_records,
         "enhancement_records": enhancement_records,
         "product_render_records": [record.to_dict() for record in product_render_records],
         "product_asset_records": product_asset_records,
         "product_cutout_records": product_cutout_records,
-        "candidate_printability_records": candidate_printability_records,
-            "final_printability_records": final_printability_records,
-            "generated_printability_records": generated_printability_records,
         "artwork_generation_records": artwork_generation_records,
         "rug_shape_records": rug_shape_records,
         "ai_background_final_records": ai_background_final_records,
         "template_mockup_records": template_mockup_records,
         "mockup_quality_records": mockup_quality_records,
-        "task4_skipped_records": task4_skipped_records,
-        "task3_results": task3_results,
-        "task4_results": task4_results,
     }
-    log(progress, "Writing stage_manifest.json.")
     write_json(run_dir / "stage_manifest.json", stage_manifest)
-    log(progress, "Writing report.html.")
+    decisions = [
+        DedupeDecision(CandidateImage(path=p, source="user_review", keyword=kw), True, "selected_for_production")
+        for p, kw, _ in resolved_sources
+    ]
     report_path = write_resilient_report(run_dir / "report.html", config, decisions, final_images, mockups, stage_manifest)
-    log(progress, "Trend-to-product workflow complete.")
+    log(progress, f"Production complete. Output: {run_dir}")
+
     return PipelineResult(
         run_dir=run_dir,
         report_path=report_path,
-        kept_images=[candidate.path for candidate, _ in kept],
-        rejected_images=[decision.candidate.path for decision in decisions if not decision.kept],
+        kept_images=[p for p, _, _ in resolved_sources],
+        rejected_images=[],
         final_images=final_images,
         mockups=mockups,
     )
+
+
+def run_trend_to_product_pipeline(
+    config: PipelineConfig,
+    run_dir: Path,
+    kept: list[CandidateImage],
+    decisions: list[DedupeDecision],
+    progress: ProgressLogger | None = None,
+    cancel_event: Event | None = None,
+) -> PipelineResult:
+    return run_production_from_candidates(
+        selected_items=kept,
+        config=config,
+        run_dir=run_dir,
+        progress=progress,
+        cancel_event=cancel_event,
+    )
+
 
 
 def prepare_discovery(
