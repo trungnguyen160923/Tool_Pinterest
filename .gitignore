@@ -69,3 +69,5 @@ Thumbs.db
 desktop.ini
 .idea/
 .vscode/
+
+.playwright-mcp/
