@@ -125,7 +125,9 @@ def build_candidates(
         "dedupe_kept": 0,
         "dedupe_rejected": 0,
     }
-    for result in results[:max_downloads]:
+    target_count = min(max_downloads, len(results))
+    LOG.info("Starting download of up to %d candidate images...", target_count)
+    for idx, result in enumerate(results[:max_downloads], start=1):
         trend = trends.get(result.trend_id)
         if trend is None:
             continue
@@ -133,13 +135,18 @@ def build_candidates(
         candidate = downloader.download(candidate)
         if candidate.download_error:
             stats["download_failed"] += 1
+            LOG.warning("Image %d/%d download error (%s): %s", idx, target_count, candidate.image_id[:8], candidate.download_error)
         else:
             stats["downloaded"] += 1
+            if idx % 3 == 0 or idx == target_count:
+                LOG.info("Downloaded %d/%d images (%s)", stats["downloaded"], target_count, candidate.image_id[:10])
         downloaded.append(candidate)
 
+    LOG.info("Download finished: %d succeeded, %d failed. Deduping...", stats["downloaded"], stats["download_failed"])
     kept, rejected = dedupe_candidates(downloaded, dhash_distance=dhash_distance)
     stats["dedupe_kept"] = len(kept)
     stats["dedupe_rejected"] = len(rejected)
+    LOG.info("Deduplication complete: %d unique images kept, %d duplicates rejected.", len(kept), len(rejected))
     write_json(output_dir / "image_candidates.json", kept)
     return kept, rejected, stats
 
@@ -291,7 +298,9 @@ def main() -> int:
         product_policy=product_policy,
         crawl_purpose=args.crawl_purpose,
     )
+    LOG.info("Starting Gemini Vision AI analysis for %d unique candidate image(s)...", len(candidates))
     vision_results = vision.analyze(candidates)
+    LOG.info("Vision AI analysis finished. Successfully analyzed %d images.", len(vision_results))
     write_json(output_dir / "product_vision_analysis.json", vision_results)
     role_counts = collections.Counter(result.product_role for result in vision_results.values())
     subject_counts = collections.Counter(result.main_subject or "unknown" for result in vision_results.values())
@@ -301,6 +310,7 @@ def main() -> int:
         for result in vision_results.values()
         if result.accepted
     )
+    LOG.info("Ranking candidates and applying direct-print classification...")
 
     hot_images, vision_rejected = rank_images(
         candidates=candidates,

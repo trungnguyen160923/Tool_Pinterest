@@ -11,6 +11,7 @@ from dataclasses import asdict, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable
+import sys
 from urllib.parse import urlparse
 
 
@@ -18,10 +19,13 @@ LOG = logging.getLogger("pinterest")
 
 
 def configure_logging(verbose: bool) -> None:
+    handler = logging.StreamHandler(sys.stdout)
     logging.basicConfig(
         level=logging.DEBUG if verbose else logging.INFO,
         format="%(asctime)s | %(levelname)-8s | %(message)s",
         datefmt="%H:%M:%S",
+        handlers=[handler],
+        force=True,
     )
     logging.getLogger("urllib3").setLevel(logging.WARNING)
 

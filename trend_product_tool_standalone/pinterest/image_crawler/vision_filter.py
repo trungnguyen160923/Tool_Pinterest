@@ -53,13 +53,14 @@ class ProductVisionFilter:
         project = env("GOOGLE_CLOUD_PROJECT")
         location = env("GOOGLE_CLOUD_LOCATION", "us-central1")
         use_enterprise = env("GOOGLE_GENAI_USE_ENTERPRISE", "").lower() in {"1", "true", "yes"}
+        http_options = {"timeout": 60000}
         try:
             if self.backend == "api-key" or (self.backend == "auto" and api_key and not use_enterprise):
-                return genai.Client(api_key=api_key)
+                return genai.Client(api_key=api_key, http_options=http_options)
             if self.backend in {"enterprise", "auto"} and project:
-                return genai.Client(vertexai=True, project=project, location=location)
+                return genai.Client(vertexai=True, project=project, location=location, http_options=http_options)
             if api_key:
-                return genai.Client(api_key=api_key)
+                return genai.Client(api_key=api_key, http_options=http_options)
         except Exception:
             if self.mode == "required":
                 raise
@@ -410,6 +411,7 @@ Image metadata:
                 results[candidate.image_id] = result
                 if self.cache and not result.error:
                     self.cache.set(cache_keys[candidate.image_id], result.__dict__)
+            LOG.info("Vision batch %d-%d / %d completed.", start + 1, start + len(batch), len(pending))
 
         if self.cache:
             self.cache.save()

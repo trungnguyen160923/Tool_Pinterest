@@ -74,6 +74,7 @@ def run_task5_trend_finder(config: Task5TrendConfig, progress: ProgressLogger | 
     config.output_dir.mkdir(parents=True, exist_ok=True)
     command = [
         sys.executable,
+        "-u",
         str(script),
         "--niche",
         config.niche,
@@ -135,6 +136,7 @@ def run_task5_image_crawler(config: Task5CrawlerConfig, progress: ProgressLogger
 
     command = [
         sys.executable,
+        "-u",
         str(script),
         "--input",
         str(config.package_path),
@@ -317,45 +319,94 @@ def run_process(
     progress: ProgressLogger | None = None,
     cancel_event: Event | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    if cancel_event is not None:
-        return run_process_cancellable(command, cwd, log_path, cancel_event, progress)
-    if progress:
-        return run_process_streaming(command, cwd, log_path, progress)
-    completed = subprocess.run(command, cwd=cwd, text=True, capture_output=True)
-    write_process_log(log_path, command, completed)
-    return completed
+    # Ensure unbuffered python execution so stdout/stderr flush immediately
+    if len(command) > 1 and command[0] == sys.executable and command[1] != "-u":
+        command = [command[0], "-u"] + command[1:]
 
-
-def run_process_cancellable(
-    command: list[str],
-    cwd: Path,
-    log_path: Path,
-    cancel_event: Event,
-    progress: ProgressLogger | None,
-) -> subprocess.CompletedProcess[str]:
-    if cancel_event.is_set():
+    if cancel_event is not None and cancel_event.is_set():
         raise Task5ProcessCancelled("Pinterest subprocess cancelled before start.")
+
     if progress:
-        progress(f"Starting: {' '.join(command[:2])}")
-    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+        progress(f"Starting: {' '.join(command[:3])}")
+
+    import queue
+    import threading
+
+    env = os.environ.copy()
+    env["PYTHONUNBUFFERED"] = "1"
+
+    creationflags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if sys.platform == "win32" else 0
     process = subprocess.Popen(
         command,
         cwd=cwd,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        bufsize=1,
         creationflags=creationflags,
     )
-    while process.poll() is None:
-        if cancel_event.is_set():
+
+    stdout_lines: list[str] = []
+    line_queue: queue.Queue[str | None] = queue.Queue()
+
+    def reader() -> None:
+        try:
+            assert process.stdout is not None
+            for raw_line in iter(process.stdout.readline, ""):
+                line_queue.put(raw_line)
+        except Exception:
+            pass
+        finally:
+            line_queue.put(None)
+
+    reader_thread = threading.Thread(target=reader, name="subprocess-reader", daemon=True)
+    reader_thread.start()
+
+    cancelled = False
+    while True:
+        if cancel_event is not None and cancel_event.is_set():
+            cancelled = True
             terminate_process_tree(process)
-            stdout, stderr = process.communicate()
-            completed = subprocess.CompletedProcess(command, process.returncode or -1, stdout=stdout, stderr=stderr)
-            write_process_log(log_path, command, completed)
-            raise Task5ProcessCancelled("Pinterest subprocess cancelled by user.")
-        time.sleep(0.2)
-    stdout, stderr = process.communicate()
-    completed = subprocess.CompletedProcess(command, process.returncode, stdout=stdout, stderr=stderr)
+            break
+
+        try:
+            raw_line = line_queue.get(timeout=0.05)
+        except queue.Empty:
+            if process.poll() is not None:
+                break
+            continue
+
+        if raw_line is None:
+            break
+
+        stdout_lines.append(raw_line)
+        clean_line = raw_line.rstrip()
+        if clean_line and progress:
+            progress(clean_line)
+
+    if cancelled:
+        reader_thread.join(timeout=2.0)
+        completed = subprocess.CompletedProcess(command, -1, stdout="".join(stdout_lines), stderr="")
+        write_process_log(log_path, command, completed)
+        raise Task5ProcessCancelled("Pinterest subprocess cancelled by user.")
+
+    returncode = process.wait()
+    reader_thread.join(timeout=2.0)
+
+    while not line_queue.empty():
+        try:
+            item = line_queue.get_nowait()
+        except queue.Empty:
+            break
+        if item is not None:
+            stdout_lines.append(item)
+            clean_item = item.rstrip()
+            if clean_item and progress:
+                progress(clean_item)
+
+    stdout = "".join(stdout_lines)
+    completed = subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr="")
     write_process_log(log_path, command, completed)
     return completed
 
@@ -371,34 +422,6 @@ def terminate_process_tree(process: subprocess.Popen[str]) -> None:
         return
     process.terminate()
 
-
-def run_process_streaming(
-    command: list[str],
-    cwd: Path,
-    log_path: Path,
-    progress: ProgressLogger,
-) -> subprocess.CompletedProcess[str]:
-    stdout_lines: list[str] = []
-    stderr = ""
-    process = subprocess.Popen(
-        command,
-        cwd=cwd,
-        text=True,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-        bufsize=1,
-    )
-    assert process.stdout is not None
-    for raw_line in process.stdout:
-        line = raw_line.rstrip()
-        stdout_lines.append(raw_line)
-        if line:
-            progress(f"Crawler: {line}")
-    returncode = process.wait()
-    stdout = "".join(stdout_lines)
-    completed = subprocess.CompletedProcess(command, returncode, stdout=stdout, stderr=stderr)
-    write_process_log(log_path, command, completed)
-    return completed
 
 
 
