@@ -833,20 +833,28 @@ def render_run_history(output_root: Path, preview_limit: int) -> None:
     metric_cols[5].metric("Designs", len(designs))
     metric_cols[6].metric("Enhanced", len(enhanced))
 
-    if not final_pngs:
-        st.warning("This run has no final images.")
-        render_empty_run_reason(crawl_manifest, run_dir)
-
     has_candidate_review = (run_dir / "candidate_review.json").exists()
-    section_options = ["Compare"]
-    if has_candidate_review:
-        section_options.append("Candidate Review")
-    section_options.extend(["Final PNG", "AI Background", "Product Cutouts", "Mockups", "Designs", "Enhanced", "Cropped", "Files", "Config"])
+    if not final_pngs:
+        if has_candidate_review:
+            st.info("💡 **Step 1 Complete:** Crawl & Pre-screening finished. Review the candidates below and click **Produce Selected Images** to generate final prints.")
+        else:
+            st.warning("This run has no final images.")
+            render_empty_run_reason(crawl_manifest, run_dir)
+
+    if has_candidate_review and not final_pngs:
+        section_options = ["Candidate Review", "Compare", "Files", "Config"]
+    else:
+        section_options = ["Compare"]
+        if has_candidate_review:
+            section_options.append("Candidate Review")
+        section_options.extend(["Final PNG", "AI Background", "Product Cutouts", "Mockups", "Designs", "Enhanced", "Cropped", "Files", "Config"])
 
     section = st.radio(
         "Run section",
         section_options,
+        index=0,
         horizontal=True,
+        key=f"{run_dir.name}_section_radio",
     )
     if section == "Compare":
         render_comparison_view(run_dir, preview_limit)
@@ -1219,6 +1227,19 @@ if isinstance(active_run, dict):
 
 # Render active review UI if available
 active_pkg = st.session_state.get("active_candidate_package")
+if not active_pkg and not is_running:
+    out_root = Path(output_root_text)
+    latest_runs = list_run_dirs(out_root)
+    if latest_runs:
+        latest_cand_file = latest_runs[0] / "candidate_review.json"
+        has_final_pngs = bool(production_final_files(latest_runs[0], "*.png"))
+        if latest_cand_file.exists() and not has_final_pngs:
+            active_pkg = read_json(latest_cand_file)
+            st.session_state["active_candidate_package"] = active_pkg
+            raw_cfg = read_json(latest_runs[0] / "config.json")
+            if isinstance(raw_cfg, dict):
+                st.session_state["active_pipeline_config"] = restore_pipeline_config(raw_cfg, out_root)
+
 if active_pkg and run_status in {"review_ready", "complete", ""}:
     st.divider()
     active_cfg = st.session_state.get("active_pipeline_config")
