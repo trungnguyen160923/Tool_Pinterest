@@ -1,0 +1,7 @@
+.env
+.pinterest_oauth_tokens.json
+pinterest/.pinterest_oauth_tokens.json
+pinterest/.pinterest_browser_profile/
+output/
+__pycache__/
+*.py[cod]

@@ -93,10 +93,18 @@ st.set_page_config(page_title="Trend Product Tool", layout="wide")
 st.title("Trend Product Tool")
 
 TOOL_ROOT = Path(__file__).resolve().parent
-REPO_ROOT = TOOL_ROOT.parent
+REPO_ROOT = TOOL_ROOT
 
 
 IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp"}
+
+
+def standalone_output_root() -> Path:
+    """Keep the copied UI from accidentally writing into the old project."""
+    configured = env("TREND_PRODUCT_OUTPUT", "").strip()
+    if configured.replace("\\", "/").rstrip("/") == "trend_product_tool/output":
+        return TOOL_ROOT / "output"
+    return Path(configured) if configured else TOOL_ROOT / "output"
 
 def read_json(path: Path) -> object | None:
     if not path.exists():
@@ -146,7 +154,7 @@ def design_files(run_dir: Path) -> list[Path]:
 
 
 def launch_pinterest_browser_login() -> Path:
-    script = REPO_ROOT / "task5_hottrend" / "pinterest_browser_login.py"
+    script = TOOL_ROOT / "pinterest" / "pinterest_browser_login.py"
     if not script.exists():
         raise RuntimeError(f"Pinterest login helper not found: {script}")
     log_path = TOOL_ROOT / "output" / "pinterest_browser_login.log"
@@ -627,7 +635,7 @@ with st.sidebar:
     product = st.selectbox("Product", product_options)
     preset = product_preset(product)
     task5_provider = "pinterest-browser"
-    output_root_text = env("TREND_PRODUCT_OUTPUT", "trend_product_tool/output")
+    output_root_text = str(standalone_output_root())
     width = preset.width_px
     height = preset.height_px
     dpi = preset.dpi

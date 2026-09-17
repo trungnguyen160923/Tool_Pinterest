@@ -3,15 +3,17 @@ requests>=2.31.0
 streamlit>=1.32.0
 fastapi>=0.110.0
 uvicorn>=0.27.0
+google-genai>=1.0.0
+playwright>=1.40.0
 
 # Optional for Task6 CLIP mode:
 # torch
 # transformers
 #
 # Optional for AI artwork/background adapters:
-# google-genai
 # pandas
 # numpy
 opencv-python-headless
+numpy>=1.24.0
 # rembg
 # onnxruntime

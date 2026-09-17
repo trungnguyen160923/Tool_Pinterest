@@ -62,12 +62,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--task3-modes", nargs="+", choices=["standard", "flex"], default=["standard"])
     parser.add_argument("--task3-models", nargs="+", choices=["lite", "nb2", "pro"], default=["nb2"])
     parser.add_argument("--task3-targets", nargs="+", choices=["1K", "2K", "4K"], default=["1K"])
-    parser.add_argument("--task4-mockup-engine", choices=["local-semantic", "task4-ai"], default="task4-ai")
+    parser.add_argument("--task4-mockup-engine", choices=["local-semantic", "task4-ai", "template-ai", "direct-ai", "blender-3d"], default="direct-ai")
     parser.add_argument("--task4-background", default="")
     parser.add_argument("--task4-ai-limit", type=int, default=None, help="Number of product outputs to send through AI background replacement. Defaults to desired output count.")
+    parser.add_argument("--task4-variants-per-product", type=int, default=4, help="Number of AI lifestyle views to generate for each product output.")
     parser.add_argument("--task4-modes", nargs="+", choices=["standard", "flex"], default=["flex"])
     parser.add_argument("--task4-models", nargs="+", choices=["nb2", "pro"], default=["pro"])
     parser.add_argument("--task4-final-integration", choices=["on", "off"], default="on")
+    parser.add_argument("--template-mockup-model", default="gemini-3-pro-image")
     return parser.parse_args()
 
 
@@ -139,9 +141,11 @@ def main() -> None:
         task4_mockup_engine=args.task4_mockup_engine.replace("-", "_"),
         task4_background=args.task4_background,
         task4_ai_limit=max(1, args.task4_ai_limit if args.task4_ai_limit is not None else args.desired_output_count),
+        task4_variants_per_product=max(1, min(4, args.task4_variants_per_product)),
         task4_modes=tuple(args.task4_modes),
         task4_models=tuple(args.task4_models),
         task4_final_integration=args.task4_final_integration,
+        template_mockup_model=args.template_mockup_model,
     )
     result = run_pipeline(config)
     print(f"Run folder: {result.run_dir}")

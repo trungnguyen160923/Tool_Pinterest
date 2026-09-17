@@ -61,6 +61,7 @@ models/
 *.pt
 *.pth
 *.onnx
+third_party/
 
 # OS/editor
 .DS_Store

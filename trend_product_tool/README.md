@@ -52,6 +52,58 @@ Run the UI:
 streamlit run trend_product_tool/app.py
 ```
 
+## HTTP API
+
+The API uses the same `run_pipeline()` implementation as the UI. A generation is
+asynchronous because Pinterest discovery/crawling and AI rendering may take minutes.
+It returns a `job_id`; poll that job until `status` is `completed`, `failed`, or
+`cancelled`.
+
+Start it from the project root:
+
+```powershell
+python trend_product_tool/api.py
+```
+
+Interactive OpenAPI documentation is at `http://127.0.0.1:8000/docs`.
+The service binds to localhost by default. Override only when intentionally exposing
+it: `TREND_PRODUCT_API_HOST=0.0.0.0` and optionally `TREND_PRODUCT_API_PORT=8000`.
+
+Create a job:
+
+```powershell
+$body = @{
+  niche = "coastal grandmother decor"
+  product = "rug"
+  desired_output_count = 3
+  design_mode = "ai-artwork"
+  ai_background_variants = 2
+} | ConvertTo-Json
+
+$job = Invoke-RestMethod http://127.0.0.1:8000/v1/jobs -Method Post -ContentType "application/json" -Body $body
+$job.job_id
+```
+
+Check it (repeat this request while it is running):
+
+```powershell
+Invoke-RestMethod "http://127.0.0.1:8000/v1/jobs/$($job.job_id)"
+```
+
+On success, the response deliberately returns only the two deliverables:
+
+- `output.marketing_images`: approved AI lifestyle/background images for product listings.
+- `output.print_cmyk_images`: CMYK JPG print masters for the production vendor.
+
+Every entry has its filename, byte size, and `download_url`. Other intermediate
+files, source images, reports, and RGB masters stay on disk but are neither listed
+nor downloadable through this API. The API always creates CMYK JPG files and uses
+the direct-AI lifestyle-background stage; callers only control how many approved
+views are requested with `ai_background_variants`. `DELETE /v1/jobs/{job_id}` asks the active
+pipeline to stop. Output remains under `trend_product_tool/output/run_*`; the API
+does not accept an arbitrary output directory, preventing file access outside the
+tool's output area.
+
 
 ## Environment Values
 

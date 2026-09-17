@@ -1,0 +1,1 @@
+﻿"""Trend product image pipeline."""
