@@ -1146,17 +1146,22 @@ def render_deliverables_showcase(
     run_by_name = {r.name: r for r in runs}
 
     if not target_run_name or target_run_name not in run_by_name:
-        # Default to active run if finished, otherwise the latest run with prints, or latest run
         if isinstance(active_run, dict) and active_run.get("result"):
             res_dir = active_run["result"].run_dir
             target_run_name = res_dir.name
         else:
             runs_with_prints = [r for r in runs if production_final_files(r, "*.png")]
             target_run_name = runs_with_prints[0].name if runs_with_prints else runs[0].name
+        st.session_state["deliverables_selected_run"] = target_run_name
 
     run_options = [r.name for r in runs]
     if "tab3_run_selector" not in st.session_state or st.session_state["tab3_run_selector"] not in run_by_name:
         st.session_state["tab3_run_selector"] = target_run_name
+    elif target_run_name and st.session_state["tab3_run_selector"] != target_run_name:
+        st.session_state["tab3_run_selector"] = target_run_name
+
+    def on_run_selector_change():
+        st.session_state["deliverables_selected_run"] = st.session_state.get("tab3_run_selector")
 
     sel_col1, sel_col2 = st.columns([2, 1])
     with sel_col1:
@@ -1165,6 +1170,7 @@ def render_deliverables_showcase(
             run_options,
             format_func=lambda x: f"📁 {x} ({format_mtime(run_by_name[x])})",
             key="tab3_run_selector",
+            on_change=on_run_selector_change,
         )
     run_dir = run_by_name[chosen_run_name]
     st.session_state["deliverables_selected_run"] = chosen_run_name
@@ -1405,6 +1411,7 @@ def render_run_archives(output_root: Path, preview_limit: int = 24) -> None:
             if final_pngs or ai_backgrounds:
                 if st.button("📦 Xem Thành phẩm tại Tab 3", key=f"btn_nav_t3_{run_dir.name}", use_container_width=True, type="primary"):
                     st.session_state["deliverables_selected_run"] = run_dir.name
+                    st.session_state["tab3_run_selector"] = run_dir.name
                     st.session_state["switch_to_tab"] = 2
                     st.rerun()
             else:
@@ -1521,6 +1528,7 @@ if isinstance(active_run, dict):
         res = active_run.get("result")
         if res is not None:
             st.session_state["deliverables_selected_run"] = res.run_dir.name
+            st.session_state["tab3_run_selector"] = res.run_dir.name
         active_run["status"] = "complete_handled"
         st.session_state["switch_to_tab"] = 2  # Auto switch to Tab 3
         st.rerun()
