@@ -201,10 +201,13 @@ def build_direct_ai_mockup(
         except Exception as exc:
             last_error = str(exc)
             if "direct ai mockup qa rejected:" in last_error.lower():
+                qa_detail = last_error.split(":", 1)[-1].strip()
                 correction = (
-                    "The previous render failed final QA: "
-                    f"{last_error.split(':', 1)[-1].strip()}. Keep the reference artwork recognizable, "
-                    "but correct the cloth geometry, scale, material, folds, lighting, and furniture occlusion."
+                    f"The previous render failed final QA: {qa_detail}. Keep the reference artwork recognizable, "
+                    "ensure clean modern sewn straight continuous linear hems with strictly no ruffled or scalloped edges, "
+                    "never contour or tab fabric edges around badges/motifs, avoid comforter box quilting, "
+                    "ensure the two pillowcases are distinct, balanced, and uncluttered with 1-3 well-scaled legible hero motifs, "
+                    "and correct cloth geometry, folds, scale, and lighting."
                 )
             if attempt < max(1, attempts) and is_transient_gemini_error(exc):
                 time.sleep(float(attempt) * 2.0)
@@ -252,11 +255,21 @@ def direct_ai_lifestyle_prompt(target: ProductTarget, pose: TemplatePose, correc
     product = target.name.strip().lower()
     if product == "blanket":
         product_rule = (
-            "Create one full-size soft woven throw blanket. Treat the attached image as its exact print artwork reference, "
-            "not as a flat image to paste over furniture. Reproduce its motifs, color palette, and repeat language faithfully "
-            "while allowing natural distortion from cloth folds."
+            "Create one full-size premium soft throw blanket. Treat the attached image as its exact print artwork reference, "
+            "not as a flat image to paste over furniture. Faithfully reproduce its motifs, illustrations, color palette, and pattern language "
+            "across the fabric with natural cloth folds. If the reference artwork includes typography, lettering, or text slogans, "
+            "render any visible text cleanly, sharply, and legibly without garbled, distorted, or scrambled characters. "
+            "Blanket Edge & Hem: The blanket is strictly a standard rectangular cut of fabric with completely straight, continuous, linear sewn hem edges on all sides. The physical perimeter edges must remain strictly straight geometric lines; "
+            "never contour, curve, scallop, tab, or cut out the fabric edge around individual badges, motifs, or illustrations. The hem edge must cut cleanly and straight across any pattern elements that reach the boundary, exactly like printed fabric cut and sewn from a roll. Strictly no wavy scalloped cutouts, no die-cut edges, no tabbed hems, no motif-shaped protrusions, no ruffled frills, no lettuce edges, no lace trims, and no decorative fringe. "
+            "Textile Material & Drape: Soft, continuous plush fleece or woven fabric with natural weight that drapes smoothly and fluidly under gravity. "
+            "Strictly no quilted comforter/duvet grid stitching, no puffy quilt squares, and no stiff cardboard or origami folds."
         )
-        avoid = "No bedspread, chair cover, towel, scarf, placemat, rug, wall hanging, second blanket, text, logo, or watermark."
+        avoid = (
+            "No scalloped borders, no die-cut or tabbed fabric edges, no motif-shaped hem protrusions, no ruffled edges or frills, "
+            "no lace trims, no comforter/duvet box quilting stitches, no stiff origami folds, no bedspread skirt, no chair cover, "
+            "towel, scarf, placemat, rug, wall hanging, no garbled or distorted lettering, "
+            "no superimposed photographer watermarks, brand logos, or UI overlays."
+        )
     elif product == "rug":
         shape = target.rug_shape.strip().lower() if target.rug_shape else "rectangle"
         product_rule = (
@@ -265,18 +278,24 @@ def direct_ai_lifestyle_prompt(target: ProductTarget, pose: TemplatePose, correc
         )
         avoid = (
             f"No rectangular rug when the required silhouette is {shape}, no blanket, bath mat, doormat, wall hanging, "
-            "text, logo, or watermark."
+            "no superimposed photographer watermarks, brand logos, or UI overlays."
         )
     else:
         product_rule = "Create one full-size product using the attached image as its faithful print artwork reference."
         avoid = pose.avoid
-    coordinated_products = (
-        "For this bed-set shot, also show exactly two matching pillowcases at the head of the bed. "
-        "Apply the same attached print artwork to both pillowcase fronts with natural scale and fabric folds. "
-        "The blanket covers the full bed surface and hangs naturally over the lower and side edges."
-        if pose.name == "bed_full_showcase"
-        else ""
-    )
+    if pose.name == "bed_full_showcase":
+        coordinated_products = (
+            "Coordinated Bedroom Set showcase: show the full blanket covering the bed plus exactly two matching printed pillowcases "
+            "propped neatly side-by-side at the head of the bed against the headboard. "
+            "Blanket drape & hems: The blanket drapes smoothly over the mattress and falls naturally over the foot and lower side edges with clean straight sewn hems. "
+            "The bottom hem hanging at the foot of the bed must form a clean straight horizontal line parallel to the floor—strictly no die-cut contouring, no scalloped tabs protruding around motifs or badges, no ruffled frills, and no comforter box quilting. Any artwork badge or motif near the edge must be cleanly trimmed off straight by the hem seam. "
+            "Pillowcase styling & scale: The two pillowcases must be distinct, separate, clean, and aesthetic. "
+            "Rather than repeating the entire dense pattern into tiny micro-icons, each pillowcase should feature 1 to 3 prominent hero motifs or illustrations from the artwork "
+            "(such as focal characters, clean badges, or hero elements) scaled comfortably to fit standard pillow proportions in an uncluttered, balanced layout. "
+            "Keep any lettering crisp, readable, and elegant. Absolutely no crowded micro-repeats, squished icons, or garbled text on the pillows."
+        )
+    else:
+        coordinated_products = ""
     return f"""
 Use case: final ecommerce lifestyle product photograph.
 {product_rule}
@@ -311,10 +330,10 @@ def template_pose_for_index(target: ProductTarget, index: int) -> TemplatePose:
             ),
             TemplatePose(
                 "bed_full_showcase",
-                "a bright, tidy bedroom with a made bed, photographed from the foot of the bed",
-                "the blanket covers the entire mattress and drapes naturally over the foot and both lower side edges; two matching printed pillowcases sit at the head of the bed",
-                "do not leave plain white pillows, do not hide the blanket under bedding, and do not replace the coordinated set with unrelated products",
-                "BEDROOM SET LISTING SHOT: show the full blanket across the bed plus exactly two matching print pillowcases. The blanket may cover the entire bed; prioritize a readable coordinated set and believable soft drape.",
+                "a bright, elegant, modern bedroom with a made bed and stylish headboard, photographed from a straight-on eye-level centered perspective from the foot of the bed with soft natural window lighting and realistic depth of field",
+                "the blanket covers the entire mattress and drapes naturally over the foot and both lower side edges with continuous straight sewn hems (the bottom hem hanging at the foot is a clean straight horizontal line parallel to the floor, never scalloped, notched, or tabbed around artwork motifs); exactly two matching printed pillowcases sit propped neatly side-by-side at the head of the bed",
+                "do not leave plain white pillows, do not merge or squish pillows into cluttered blobs, no scalloped cuts or ruffled frills, no die-cut tabs following badge shapes, no comforter box quilting stitches, no stiff origami folds, no garbled typography, no tilted or extreme diagonal camera angles, no photographer watermarks",
+                "BEDROOM SET LISTING SHOT: showcase a coordinated set of one full blanket across the bed plus exactly two matching pillowcases. Pillowcases must feature clean, balanced, well-scaled motifs without clutter; blanket must have clean straight sewn hems and a realistic soft drape.",
             ),
             TemplatePose(
                 "folded_detail_showcase",

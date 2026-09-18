@@ -415,6 +415,197 @@ class TestTextilePatternAndReviewPipeline(unittest.TestCase):
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
 
+    def test_bedroom_set_mockup_prompt_and_qa_alignment(self):
+        """Verify direct AI lifestyle prompt and QA evaluator are aligned for bedroom set blankets."""
+        from trend_tool.template_mockup import direct_ai_lifestyle_prompt, template_pose_for_index
+        from trend_tool.printability import direct_ai_mockup_prompt
+
+        target = ProductTarget(name="blanket", width_px=10000, height_px=11000, dpi=300)
+        pose = template_pose_for_index(target, 3)
+        self.assertEqual(pose.name, "bed_full_showcase")
+
+        prompt = direct_ai_lifestyle_prompt(target, pose, "")
+        # Composition checks:
+        self.assertIn("Bedroom Set", prompt)
+        self.assertIn("two matching printed pillowcases", prompt)
+        # Blanket hem & drape checks:
+        self.assertIn("clean", prompt.lower())
+        self.assertIn("straight", prompt.lower())
+        self.assertIn("sewn", prompt.lower())
+        self.assertIn("strictly no wavy scalloped cutouts", prompt.lower())
+        self.assertIn("no comforter/duvet box quilting stitches", prompt.lower())
+        # Pillowcase aesthetic and scaling checks:
+        self.assertIn("rather than repeating the entire dense pattern into tiny micro-icons", prompt.lower())
+        self.assertIn("hero motifs", prompt.lower())
+        self.assertIn("uncluttered", prompt.lower())
+
+        # Direct AI Mockup QA Prompt alignment checks:
+        qa_prompt = direct_ai_mockup_prompt(target, pose_name=pose.name, pose_requirement=pose.placement, require_matching_pillowcases=True)
+        self.assertIn("clean_straight_hems_no_scallops", qa_prompt)
+        self.assertIn("matching_pillowcases_present", qa_prompt)
+        self.assertIn("pillowcases_clean_and_uncluttered", qa_prompt)
+        self.assertIn("no_comforter_quilting_grids", qa_prompt)
+        self.assertIn("typography_crisp_and_legible", qa_prompt)
+        self.assertIn("clean, continuous straight modern sewn hems", qa_prompt.lower())
+        self.assertIn("reject wavy scalloped edges", qa_prompt.lower())
+        self.assertIn("motifs scaled naturally to pillow proportions without squishing or visual clutter", qa_prompt.lower())
+
+    def test_direct_ai_qa_assessment_logic(self):
+        """Verify assess_direct_ai_mockup decision logic accepts clean renders and rejects ruffles/clutter."""
+        from unittest.mock import patch
+        from trend_tool.printability import assess_direct_ai_mockup
+
+        target = ProductTarget(name="blanket", width_px=10000, height_px=11000, dpi=300)
+        mock_img = Image.new("RGB", (100, 100), color="white")
+
+        with tempfile.TemporaryDirectory() as tmp:
+            ref_path = Path(tmp) / "ref.png"
+            mockup_path = Path(tmp) / "mockup.png"
+            mock_img.save(ref_path)
+            mock_img.save(mockup_path)
+
+            base_assessment = {
+                "artwork_identity_preserved": True,
+                "product_type_correct": True,
+                "full_size_scale_plausible": True,
+                "fabric_material_believable": True,
+                "fold_geometry_consistent": True,
+                "occlusion_and_contact_believable": True,
+                "lighting_coherent": True,
+                "looks_like_flat_overlay": False,
+                "looks_like_wrong_product": False,
+                "matching_pillowcases_present": True,
+                "pillowcases_clean_and_uncluttered": True,
+                "clean_straight_hems_no_scallops": True,
+                "no_comforter_quilting_grids": True,
+                "typography_crisp_and_legible": True,
+                "listing_realism_score": 92,
+                "reason": "Passed all quality criteria.",
+            }
+
+            with patch("trend_tool.printability._vision_pair_assessment", return_value=base_assessment):
+                decision = assess_direct_ai_mockup(
+                    ref_path,
+                    mockup_path,
+                    target,
+                    pose_name="bed_full_showcase",
+                    require_matching_pillowcases=True,
+                    backend="dummy",
+                    model="dummy",
+                )
+                self.assertTrue(decision.accepted)
+
+            # Rejection case 1: clean_straight_hems_no_scallops is False
+            ruffled_assessment = dict(base_assessment)
+            ruffled_assessment["clean_straight_hems_no_scallops"] = False
+            ruffled_assessment["reason"] = "Ruffled scalloped edges detected on blanket hem."
+            with patch("trend_tool.printability._vision_pair_assessment", return_value=ruffled_assessment):
+                decision = assess_direct_ai_mockup(
+                    ref_path,
+                    mockup_path,
+                    target,
+                    pose_name="bed_full_showcase",
+                    require_matching_pillowcases=True,
+                    backend="dummy",
+                    model="dummy",
+                )
+                self.assertFalse(decision.accepted)
+                self.assertIn("Ruffled scalloped edges", decision.reason)
+
+            # Rejection case 2: matching_pillowcases_present is False
+            missing_pillows = dict(base_assessment)
+            missing_pillows["matching_pillowcases_present"] = False
+            missing_pillows["reason"] = "Missing matching pillowcases."
+            with patch("trend_tool.printability._vision_pair_assessment", return_value=missing_pillows):
+                decision = assess_direct_ai_mockup(
+                    ref_path,
+                    mockup_path,
+                    target,
+                    pose_name="bed_full_showcase",
+                    require_matching_pillowcases=True,
+                    backend="dummy",
+                    model="dummy",
+                )
+                self.assertFalse(decision.accepted)
+
+            # Rejection case 3: pillowcases_clean_and_uncluttered is False (cluttered/squished micro-repeats)
+            cluttered_pillows = dict(base_assessment)
+            cluttered_pillows["pillowcases_clean_and_uncluttered"] = False
+            cluttered_pillows["reason"] = "Pillowcases have cluttered micro-repeats."
+            with patch("trend_tool.printability._vision_pair_assessment", return_value=cluttered_pillows):
+                decision = assess_direct_ai_mockup(
+                    ref_path,
+                    mockup_path,
+                    target,
+                    pose_name="bed_full_showcase",
+                    require_matching_pillowcases=True,
+                    backend="dummy",
+                    model="dummy",
+                )
+                self.assertFalse(decision.accepted)
+
+            # Rejection case 4: no_comforter_quilting_grids is False
+            quilted_blanket = dict(base_assessment)
+            quilted_blanket["no_comforter_quilting_grids"] = False
+            quilted_blanket["reason"] = "Quilted duvet grid stitching visible."
+            with patch("trend_tool.printability._vision_pair_assessment", return_value=quilted_blanket):
+                decision = assess_direct_ai_mockup(
+                    ref_path,
+                    mockup_path,
+                    target,
+                    pose_name="bed_full_showcase",
+                    require_matching_pillowcases=True,
+                    backend="dummy",
+                    model="dummy",
+                )
+                self.assertFalse(decision.accepted)
+
+            # Rejection case 5: typography_crisp_and_legible is False
+            garbled_text = dict(base_assessment)
+            garbled_text["typography_crisp_and_legible"] = False
+            garbled_text["reason"] = "Garbled pseudo-letters on blanket."
+            with patch("trend_tool.printability._vision_pair_assessment", return_value=garbled_text):
+                decision = assess_direct_ai_mockup(
+                    ref_path,
+                    mockup_path,
+                    target,
+                    pose_name="bed_full_showcase",
+                    require_matching_pillowcases=True,
+                    backend="dummy",
+                    model="dummy",
+                )
+                self.assertFalse(decision.accepted)
+
+            # Non-blanket target (e.g. rug) regression test:
+            # Rug should pass even if blanket-specific clean_straight_hems_no_scallops is False
+            rug_target = ProductTarget(name="rug", rug_shape="rectangle", width_px=4000, height_px=6400, dpi=150)
+            rug_assessment = {
+                "artwork_identity_preserved": True,
+                "product_type_correct": True,
+                "rug_shape_correct": True,
+                "full_size_scale_plausible": True,
+                "fabric_material_believable": True,
+                "fold_geometry_consistent": True,
+                "occlusion_and_contact_believable": True,
+                "lighting_coherent": True,
+                "looks_like_flat_overlay": False,
+                "looks_like_wrong_product": False,
+                "clean_straight_hems_no_scallops": False,
+                "clean_hems_and_no_ruffles": False,
+                "listing_realism_score": 90,
+                "reason": "Realistic rectangular rug.",
+            }
+            with patch("trend_tool.printability._vision_pair_assessment", return_value=rug_assessment):
+                rug_decision = assess_direct_ai_mockup(
+                    ref_path,
+                    mockup_path,
+                    rug_target,
+                    backend="dummy",
+                    model="dummy",
+                )
+                self.assertTrue(rug_decision.accepted)
+
 
 if __name__ == "__main__":
     unittest.main()
+

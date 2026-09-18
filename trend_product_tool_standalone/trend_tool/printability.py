@@ -305,10 +305,18 @@ def assess_direct_ai_mockup(
     except Exception as exc:
         return PrintabilityDecision("direct_ai_mockup", mockup_path, False, f"direct AI mockup quality assessment failed: {exc}", metrics, {})
     score = _percentage(assessment.get("listing_realism_score"))
+    clean_hems = _bool(assessment.get("clean_straight_hems_no_scallops", assessment.get("clean_hems_and_no_ruffles", True)))
+    pillowcases_clean = _bool(assessment.get("pillowcases_clean_and_uncluttered", True))
+    no_quilting = _bool(assessment.get("no_comforter_quilting_grids", True))
+    typography_clean = _bool(assessment.get("typography_crisp_and_legible", True))
+
+    is_blanket = target.name == "blanket"
+    is_rug = target.name == "rug"
+
     accepted = (
         _bool(assessment.get("artwork_identity_preserved"))
         and _bool(assessment.get("product_type_correct"))
-        and (target.name != "rug" or _bool(assessment.get("rug_shape_correct")))
+        and (not is_rug or _bool(assessment.get("rug_shape_correct")))
         and _bool(assessment.get("full_size_scale_plausible"))
         and _bool(assessment.get("fabric_material_believable"))
         and _bool(assessment.get("fold_geometry_consistent"))
@@ -316,7 +324,9 @@ def assess_direct_ai_mockup(
         and _bool(assessment.get("lighting_coherent"))
         and not _bool(assessment.get("looks_like_flat_overlay"))
         and not _bool(assessment.get("looks_like_wrong_product"))
-        and (not require_matching_pillowcases or _bool(assessment.get("matching_pillowcases_present")))
+        and (not require_matching_pillowcases or (_bool(assessment.get("matching_pillowcases_present")) and pillowcases_clean))
+        and (not is_blanket or (clean_hems and no_quilting))
+        and typography_clean
         and score >= 84
     )
     reason = str(assessment.get("reason") or "direct AI mockup passed artwork fidelity and realism QA.")
@@ -457,7 +467,9 @@ def direct_ai_mockup_prompt(
     require_matching_pillowcases: bool = False,
 ) -> str:
     pillowcase_rule = (
-        "This is a bedroom-set shot: require exactly two matching pillowcases using the same recognizable print identity as the blanket."
+        "This is a bedroom-set shot: require exactly two matching pillowcases using the same recognizable print identity as the blanket. "
+        "The two pillowcases must be distinct, separate, and aesthetic, with motifs scaled naturally to pillow proportions without squishing or visual clutter. "
+        "Reject mockups with plain white pillows, missing pillowcases, merged/deformed pillows, or cluttered/garbled pillowcase prints."
         if require_matching_pillowcases
         else "Matching pillowcases are not required for this pose."
     )
@@ -466,14 +478,32 @@ def direct_ai_mockup_prompt(
         if target.name == "rug"
         else "Rug silhouette is not applicable."
     )
+    blanket_edge_rule = (
+        "For blankets: require clean, continuous straight modern sewn hems. Reject wavy scalloped edges, die-cut tabs protruding around badge/motif shapes, ruffled frills, lace trims, or comforter/duvet box quilting grids. Drape must be soft, fluid, and natural, not stiff origami/cardboard folds. Any typography from the artwork must be rendered crisply and legibly without garbled, distorted, or scrambled nonsense characters."
+        if target.name == "blanket"
+        else ""
+    )
     return f"""
 Compare REFERENCE_PRINT_ARTWORK with the DIRECT_AI_LIFESTYLE_MOCKUP for a {target.name}.
 The reference is a flat textile design. The mockup is allowed to bend, fold, crop, and repeat that design naturally across the product surface, but must preserve its recognizable motifs, palette, and visual identity.
 Required listing pose: {pose_name or "a credible product showcase"}. {pose_requirement or "Show the product naturally and clearly."}
 {pillowcase_rule}
 {rug_shape_rule}
-Judge whether the final image is a credible ecommerce photograph: correct product type and full-size scale, realistic textile thickness/weave, fold geometry, furniture occlusion, contact shadows, and coherent lighting.
-Reject artwork that was substituted with a different design, turned into a generic unrelated pattern, or appears as a flat overlay, poster, or sticker.
+{blanket_edge_rule}
+
+Evaluation criteria:
+1. Pillowcase Quality (if required for bedroom set):
+   - 'matching_pillowcases_present': must be true if exactly two matching pillowcases are present on the bed.
+   - 'pillowcases_clean_and_uncluttered': must be true ONLY if motifs are scaled naturally to pillow proportions with 1-3 prominent hero motifs and clean margins. Must be FALSE if the pillows have tiny squished micro-repeats, crowded cluttered badges, deformed pillow shapes, or unreadable garbled text. (If matching pillowcases are not required, set true).
+2. Blanket Edges & Drape (for blankets):
+   - 'clean_straight_hems_no_scallops': must be true if the blanket perimeter hems are continuous straight geometric lines. Must be FALSE if the hem is wavy, scalloped, tabbed/contoured around motifs/badges, has die-cut tabs at the bottom/sides, or has ruffled frills. (If not blanket, set true).
+   - 'no_comforter_quilting_grids': must be true if the blanket is smooth unquilted fleece/woven textile. Must be FALSE if there are duvet/comforter box, grid, or diamond quilting stitches. (If not blanket, set true).
+3. Typography Fidelity:
+   - 'typography_crisp_and_legible': must be true if any visible lettering/slogans from the artwork are sharp, legible, and ungarbled. Must be FALSE if text is distorted, scrambled, or rendered as nonsense pseudo-characters. If reference has no text, set true.
+4. Overall Realism:
+   - Judge whether the final image is a credible ecommerce photograph: correct product type and full-size scale, realistic textile thickness/weave, natural soft folds without rigid cardboard lines, furniture occlusion, contact shadows, and coherent lighting.
+   - Reject artwork that was substituted with a different design, turned into a generic unrelated pattern, or appears as a flat overlay, poster, or sticker.
+
 Return JSON only:
 {{
   "artwork_identity_preserved": false,
@@ -487,6 +517,11 @@ Return JSON only:
   "looks_like_flat_overlay": false,
   "looks_like_wrong_product": false,
   "matching_pillowcases_present": false,
+  "pillowcases_clean_and_uncluttered": false,
+  "clean_straight_hems_no_scallops": false,
+  "clean_hems_and_no_ruffles": false,
+  "no_comforter_quilting_grids": false,
+  "typography_crisp_and_legible": false,
   "listing_realism_score": 0,
   "reason": "short concrete reason"
 }}
