@@ -479,7 +479,7 @@ def direct_ai_mockup_prompt(
         else "Rug silhouette is not applicable."
     )
     blanket_edge_rule = (
-        "For blankets: require clean, continuous straight modern sewn hems. Reject wavy scalloped edges, die-cut tabs protruding around badge/motif shapes, ruffled frills, lace trims, or comforter/duvet box quilting grids. Drape must be soft, fluid, and natural, not stiff origami/cardboard folds. Any typography from the artwork must be rendered crisply and legibly without garbled, distorted, or scrambled nonsense characters."
+        "For blankets: require clean, continuous straight modern sewn hems. The bottom hem hanging across the foot of the bed must form a level, continuous, straight horizontal line parallel to the floor between corners. Reject wavy scalloped edges, die-cut tabs protruding around badge/motif shapes, drooping tongues or flaps of fabric extended to complete illustrations, ruffled frills, lace trims, or comforter/duvet box quilting grids. Drape must be soft, fluid, and natural, not stiff origami/cardboard folds. Any typography from the artwork must be rendered crisply and legibly without garbled, distorted, or scrambled nonsense characters."
         if target.name == "blanket"
         else ""
     )
@@ -496,7 +496,7 @@ Evaluation criteria:
    - 'matching_pillowcases_present': must be true if exactly two matching pillowcases are present on the bed.
    - 'pillowcases_clean_and_uncluttered': must be true ONLY if motifs are scaled naturally to pillow proportions with 1-3 prominent hero motifs and clean margins. Must be FALSE if the pillows have tiny squished micro-repeats, crowded cluttered badges, deformed pillow shapes, or unreadable garbled text. (If matching pillowcases are not required, set true).
 2. Blanket Edges & Drape (for blankets):
-   - 'clean_straight_hems_no_scallops': must be true if the blanket perimeter hems are continuous straight geometric lines. Must be FALSE if the hem is wavy, scalloped, tabbed/contoured around motifs/badges, has die-cut tabs at the bottom/sides, or has ruffled frills. (If not blanket, set true).
+   - 'clean_straight_hems_no_scallops': must be true ONLY if the blanket perimeter hems (especially across the foot of the bed) are level, continuous, straight geometric lines. Must be FALSE if the hem has protruding tabs, contouring lobes around motifs/badges, sagging tongues drooping downward, wavy scallops, die-cut tabs at the bottom/sides, or ruffled frills. (If not blanket, set true).
    - 'no_comforter_quilting_grids': must be true if the blanket is smooth unquilted fleece/woven textile. Must be FALSE if there are duvet/comforter box, grid, or diamond quilting stitches. (If not blanket, set true).
 3. Typography Fidelity:
    - 'typography_crisp_and_legible': must be true if any visible lettering/slogans from the artwork are sharp, legible, and ungarbled. Must be FALSE if text is distorted, scrambled, or rendered as nonsense pseudo-characters. If reference has no text, set true.

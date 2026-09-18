@@ -231,7 +231,7 @@ def generate_direct_ai_lifestyle(
 
     config = types.GenerateContentConfig(
         response_modalities=["IMAGE"],
-        temperature=0.30,
+        temperature=0.25,
         image_config=types.ImageConfig(aspect_ratio="1:1", image_size="2K", output_mime_type="image/png"),
     )
     response = client.models.generate_content(
@@ -259,15 +259,17 @@ def direct_ai_lifestyle_prompt(target: ProductTarget, pose: TemplatePose, correc
             "not as a flat image to paste over furniture. Faithfully reproduce its motifs, illustrations, color palette, and pattern language "
             "across the fabric with natural cloth folds. If the reference artwork includes typography, lettering, or text slogans, "
             "render any visible text cleanly, sharply, and legibly without garbled, distorted, or scrambled characters. "
-            "Blanket Edge & Hem: The blanket is strictly a standard rectangular cut of fabric with completely straight, continuous, linear sewn hem edges on all sides. The physical perimeter edges must remain strictly straight geometric lines; "
-            "never contour, curve, scallop, tab, or cut out the fabric edge around individual badges, motifs, or illustrations. The hem edge must cut cleanly and straight across any pattern elements that reach the boundary, exactly like printed fabric cut and sewn from a roll. Strictly no wavy scalloped cutouts, no die-cut edges, no tabbed hems, no motif-shaped protrusions, no ruffled frills, no lettuce edges, no lace trims, and no decorative fringe. "
+            "CRITICAL HEM & EDGE SPECIFICATION (NO PROTRUDING TABS / FLAPS): The blanket is a STRICT RECTANGLE manufactured by cutting printed roll fabric with a straight rotary blade and sewing a straight linear hem on all sides. "
+            "The physical perimeter edges must remain strictly straight geometric lines; never contour, curve, scallop, tab, or cut out the fabric edge around individual badges, motifs, or illustrations. "
+            "ZERO PROTRUSIONS / ZERO TABS: Do NOT dip, stretch, extend, or bulge the fabric downward to complete any illustration, badge, or motif. If a motif, character, pumpkin, cat, skull, or framed badge falls along the edge, it MUST BE CUT CLEANLY IN HALF by the straight hemline, exactly like real cut-and-sewn cloth. "
+            "Strictly no wavy scalloped cutouts, no die-cut tabs contouring around motifs, no sagging tongues or conical flaps of fabric drooping lower than the rest of the hem, no ruffled frills, no lettuce edges, no lace trims, and no decorative fringe. "
             "Textile Material & Drape: Soft, continuous plush fleece or woven fabric with natural weight that drapes smoothly and fluidly under gravity. "
             "Strictly no quilted comforter/duvet grid stitching, no puffy quilt squares, and no stiff cardboard or origami folds."
         )
         avoid = (
-            "No scalloped borders, no die-cut or tabbed fabric edges, no motif-shaped hem protrusions, no ruffled edges or frills, "
-            "no lace trims, no comforter/duvet box quilting stitches, no stiff origami folds, no bedspread skirt, no chair cover, "
-            "towel, scarf, placemat, rug, wall hanging, no garbled or distorted lettering, "
+            "No scalloped borders, no die-cut or tabbed fabric edges, no motif-shaped hem protrusions, no drooping fabric flaps or tongues, "
+            "no ruffled edges or frills, no lace trims, no comforter/duvet box quilting stitches, no stiff origami folds, no bedspread skirt, "
+            "no chair cover, towel, scarf, placemat, rug, wall hanging, no garbled or distorted lettering, "
             "no superimposed photographer watermarks, brand logos, or UI overlays."
         )
     elif product == "rug":
@@ -288,11 +290,11 @@ def direct_ai_lifestyle_prompt(target: ProductTarget, pose: TemplatePose, correc
             "Coordinated Bedroom Set showcase: show the full blanket covering the bed plus exactly two matching printed pillowcases "
             "propped neatly side-by-side at the head of the bed against the headboard. "
             "Blanket drape & hems: The blanket drapes smoothly over the mattress and falls naturally over the foot and lower side edges with clean straight sewn hems. "
-            "The bottom hem hanging at the foot of the bed must form a clean straight horizontal line parallel to the floor—strictly no die-cut contouring, no scalloped tabs protruding around motifs or badges, no ruffled frills, and no comforter box quilting. Any artwork badge or motif near the edge must be cleanly trimmed off straight by the hem seam. "
+            "The bottom hem hanging at the foot of the bed MUST FORM A LEVEL, CONTINUOUS, RULER-STRAIGHT HORIZONTAL LINE parallel to the floor between the bed's left and right corners—strictly no die-cut contouring, no scalloped tabs or tongues protruding around motifs or badges, no ruffled frills, and no comforter box quilting. Any artwork badge or motif near the edge must be cleanly sliced in half by the straight horizontal hemline. "
             "Pillowcase styling & scale: The two pillowcases must be distinct, separate, clean, and aesthetic. "
-            "Rather than repeating the entire dense pattern into tiny micro-icons, each pillowcase should feature 1 to 3 prominent hero motifs or illustrations from the artwork "
-            "(such as focal characters, clean badges, or hero elements) scaled comfortably to fit standard pillow proportions in an uncluttered, balanced layout. "
-            "Keep any lettering crisp, readable, and elegant. Absolutely no crowded micro-repeats, squished icons, or garbled text on the pillows."
+            "Rather than repeating the entire dense pattern into tiny micro-icons, each pillowcase should feature 1 to 2 prominent, well-scaled hero motifs from the artwork "
+            "(e.g. one clean decorative illustration, character, or badge per pillowcase) with clean negative space and readable typography in an uncluttered, balanced layout. "
+            "Keep any lettering crisp, readable, and elegant. Strictly avoid repetitive dense micro-pattern tiling on the pillowcases. Absolutely no crowded micro-repeats, squished icons, or garbled text on the pillows."
         )
     else:
         coordinated_products = ""
