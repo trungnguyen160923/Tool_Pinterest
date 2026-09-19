@@ -47,7 +47,7 @@ class CreateJobRequest(BaseModel):
     trend_type: Literal["growing", "monthly", "yearly", "seasonal"] = "growing"
     design_mode: Literal["ai-artwork", "direct", "product-design", "pattern-repeat"] = "ai-artwork"
     artwork_image_size: Literal["1K", "2K", "4K"] = "2K"
-    ai_background_variants: int = Field(default=4, ge=1, le=4)
+    ai_background_variants: int = Field(default=5, ge=1, le=5)
     remove_white_background: bool = False
 
     @model_validator(mode="after")

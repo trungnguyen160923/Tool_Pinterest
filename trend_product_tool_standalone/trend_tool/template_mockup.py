@@ -260,16 +260,17 @@ def direct_ai_lifestyle_prompt(target: ProductTarget, pose: TemplatePose, correc
             "not as a flat image to paste over furniture. Faithfully reproduce its motifs, illustrations, color palette, and pattern language "
             "across the fabric with natural cloth folds. If the reference artwork includes typography, lettering, or text slogans, "
             "render any visible text cleanly, sharply, and legibly without garbled, distorted, or scrambled characters. "
-            "CRITICAL HEM & EDGE SPECIFICATION (NO PROTRUDING TABS / FLAPS): The blanket is a STRICT RECTANGLE manufactured by cutting printed roll fabric with a straight rotary blade and sewing a straight linear hem on all sides. "
-            "The physical perimeter edges must remain strictly straight geometric lines; never contour, curve, scallop, tab, or cut out the fabric edge around individual badges, motifs, or illustrations. "
-            "ZERO PROTRUSIONS / ZERO TABS: Do NOT dip, stretch, extend, or bulge the fabric downward to complete any illustration, badge, or motif. If a motif, character, pumpkin, cat, skull, or framed badge falls along the edge, it MUST BE CUT CLEANLY IN HALF by the straight hemline, exactly like real cut-and-sewn cloth. "
+            "CRITICAL HEM & EDGE SPECIFICATION (NO PROTRUDING TABS / FLAPS / NOTCHES): The blanket is a STRICT RECTANGLE manufactured by cutting printed roll fabric with a straight rotary blade and sewing a straight linear hem on all sides. "
+            "The physical perimeter edges must remain strictly intact geometric lines; never contour, curve, scallop, tab, notch, or cut out the fabric edge around individual badges, motifs, or illustrations, and never bite out concave chunks or empty gaps from the corners. "
+            "ZERO PROTRUSIONS / ZERO TABS / ZERO NOTCHES: Do NOT dip, stretch, extend, or notch the fabric. If a motif, character, pumpkin, cat, skull, or framed badge falls along the edge, it MUST BE CUT CLEANLY IN HALF by the straight hemline, exactly like real cut-and-sewn cloth. "
+            "Underside Lining & Folds: If any fold, roll, or hem curl exposes the reverse side of the blanket, render an authentic plush white or ivory solid fleece/sherpa backing with visible two-layer cloth thickness and realistic contact shadow, never an empty void or transparent hole. "
             "Strictly no wavy scalloped cutouts, no die-cut tabs contouring around motifs, no sagging tongues or conical flaps of fabric drooping lower than the rest of the hem, no ruffled frills, no lettuce edges, no lace trims, and no decorative fringe. "
             "Textile Material & Drape: Soft, continuous plush fleece or woven fabric with natural weight that drapes smoothly and fluidly under gravity. "
             "Strictly no quilted comforter/duvet grid stitching, no puffy quilt squares, and no stiff cardboard or origami folds."
         )
         avoid = (
             "No scalloped borders, no die-cut or tabbed fabric edges, no motif-shaped hem protrusions, no drooping fabric flaps or tongues, "
-            "no flat 2D cardboard pillows, no paper placards or stickers, no ruffled edges or frills, no lace trims, "
+            "no notched, concave, or cut-out hem corners, no flat 2D cardboard pillows, no paper placards or stickers, no ruffled edges or frills, no lace trims, "
             "no comforter/duvet box quilting stitches, no stiff origami folds, no bedspread skirt, "
             "no chair cover, towel, scarf, placemat, rug, wall hanging, no garbled or distorted lettering, "
             "no superimposed photographer watermarks, brand logos, or UI overlays."
@@ -328,9 +329,9 @@ def template_pose_for_index(target: ProductTarget, index: int) -> TemplatePose:
             TemplatePose(
                 "sofa_front_showcase",
                 "a bright, warm, modern living room with a stylish neutral upholstered three-seat sofa, photographed at a natural eye-level perspective at a subtle 15-20 degree three-quarter angle with soft window lighting and realistic depth of field",
-                "the blanket conforms realistically to the 3D sofa contours: draped over the backrest, laying smoothly across the horizontal seat cushions showing visible cushion depth and perspective, then cascading over the front seat edge in a soft waterfall drape towards the floor with natural cloth gravity, leaving sofa armrests and cushion boundaries clearly defined",
-                "do not create a flat 2D graphic overlay, poster, banner, sticker, or rigid billboard stretched flat across the sofa without seat cushion depth; strictly no fitted slipcover, tablecloth, wall hanging, or tiny throw; no ruler-straight floating bottom hem, no garbled typography, no tilted extreme Dutch angles",
-                "SOFA LISTING SHOT: showcase the full-size blanket on the sofa with authentic 3D depth and fabric weight. The printed artwork motifs and typography remain centered, crisp, and fully readable while warping organically and subtly across the cushion curves; soft ambient shadows under the seat lip and at the bottom hem establish physical contact and realism.",
+                "the blanket conforms strictly to the 3D sofa contours with physical cloth geometry: draped over the backrest, forming a distinct horizontal shelf across the seat cushions showing clear cushion depth, then cascading over the front seat edge in a soft vertical waterfall drape towards the floor; the perimeter edges remain an intact, continuous, unbroken rectangle parallel to the floor without cut-out notches, scallops, or empty bites; if any edge rolls or folds, it realistically reveals the plush white/ivory fleece underside lining with two-layer fabric thickness and contact drop shadow",
+                "do not create a flat 2D graphic overlay, poster, banner, sticker, or rigid billboard stretched flat across the sofa without seat cushion depth; strictly no notched, concave, or bitten-off hem corners; no ruler-straight floating bottom hem without gravity, no garbled typography, no tilted extreme Dutch angles",
+                "SOFA LISTING SHOT: showcase the full-size blanket on the sofa with authentic 3D depth and fabric weight. The printed artwork motifs and typography remain centered, crisp, and fully readable while warping organically and subtly across the cushion curves; motifs on the horizontal seat surface recede naturally in 3D perspective foreshortening; soft ambient shadows under the seat lip and at the bottom hem establish physical contact and realism.",
             ),
             TemplatePose(
                 "bed_full_showcase",
@@ -347,11 +348,11 @@ def template_pose_for_index(target: ProductTarget, index: int) -> TemplatePose:
                 "DETAIL LISTING SHOT: emphasize realistic plush fleece material, edge binding, and thick rounded cloth folds. The folds naturally crop the artwork so only a portion of the motifs and badges are visible across the folded layers, exactly like a genuine high-end ecommerce listing photograph.",
             ),
             TemplatePose(
-                "bench_throw",
-                "a quiet bedroom or entryway with an upholstered bench, photographed at a natural eye-level angle",
-                "the blanket is folded over the bench with one short end draped down naturally",
-                "do not use a dining table, floor, or an upright chair-cover pose",
-                "ALTERNATE DETAIL SHOT: show a believable full-size blanket with material and scale clear.",
+                "sofa_casual_drape",
+                "a stylish, cozy modern living room with a neutral three-seat sofa, photographed at a natural eye-level perspective from a slight three-quarter angle with warm natural window sunlight and realistic depth of field",
+                "the blanket is artfully and casually draped over one side of the sofa: resting over the upper backrest, cascading over one armrest and spreading loosely across the adjacent seat cushion with one corner hanging down toward the floor in soft, natural, fluid cloth folds; the plush white or ivory underside lining is subtly visible at the rolled edge folds; the sofa cushions and room setting remain naturally visible around it",
+                "do not spread the blanket flat like a bedsheet or tablecloth across the entire sofa; strictly do not create a flat 2D poster, banner, sticker, or rigid billboard; no ruler-straight floating bottom hem, no garbled typography, no messy squished blobs",
+                "CASUAL LIFESTYLE SHOT: showcase the throw blanket draped effortlessly and authentically in a high-end interior scene. The main printed motifs and typography remain clearly recognizable and prominent across the drape, with natural fabric thickness, soft contact shadows, and realistic textile weight.",
             ),
         )
     else:

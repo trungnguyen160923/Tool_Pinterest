@@ -535,7 +535,7 @@ def render_comparison_view(run_dir: Path, preview_limit: int) -> None:
             backgrounds = list(row.ai_background_paths)
             st.write(f"4. Phối cảnh AI phòng khách ({len(backgrounds)} góc nhìn)")
             if backgrounds:
-                background_cols = st.columns(min(4, len(backgrounds)))
+                background_cols = st.columns(min(5, len(backgrounds)))
                 for index, background in enumerate(backgrounds):
                     render_comparison_cell(background_cols[index % len(background_cols)], f"Góc nhìn {index + 1}", background)
             else:
@@ -737,7 +737,7 @@ def render_crawl_tab(
             with c_p1:
                 desired_count = st.slider("Số lượng mẫu cần sản xuất", min_value=1, max_value=20, value=5, step=1, key="tab1_desired_count")
             with c_p2:
-                bg_variants = st.slider("Số góc mockup AI / mẫu", min_value=1, max_value=4, value=4, step=1, key="tab1_bg_variants")
+                bg_variants = st.slider("Số góc mockup AI / mẫu", min_value=1, max_value=5, value=5, step=1, key="tab1_bg_variants")
             workflow_mode_select = st.radio(
                 "Chế độ vận hành",
                 ["Interactive (2-Step Review: Khuyên dùng)", "1-Click Auto (Tự động cào và xuất xưởng luôn)"],

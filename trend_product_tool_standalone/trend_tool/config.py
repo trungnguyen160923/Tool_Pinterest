@@ -71,7 +71,7 @@ class PipelineConfig:
     task4_mockup_engine: str = "direct_ai"
     task4_background: str = ""
     task4_ai_limit: int = 5
-    task4_variants_per_product: int = 4
+    task4_variants_per_product: int = 5
     task4_quality_attempts: int = 3
     template_mockup_model: str = "gemini-3-pro-image"
     task4_modes: tuple[str, ...] = ("flex",)
@@ -81,7 +81,7 @@ class PipelineConfig:
     dedupe_threshold: int = 6
     remove_white_background: bool = False
     export_cmyk: bool = True
-    mockup_count: int = 4
+    mockup_count: int = 5
 
 
 def product_preset(name: str) -> ProductTarget:
