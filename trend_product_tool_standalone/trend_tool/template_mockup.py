@@ -206,7 +206,8 @@ def build_direct_ai_mockup(
                     f"The previous render failed final QA: {qa_detail}. Keep the reference artwork recognizable, "
                     "ensure clean modern sewn straight continuous linear hems with strictly no ruffled or scalloped edges, "
                     "never contour or tab fabric edges around badges/motifs, avoid comforter box quilting, "
-                    "ensure the two pillowcases are distinct, balanced, and uncluttered with 1-3 well-scaled legible hero motifs, "
+                    "ensure the blanket realistically conforms to 3D furniture depth and cushion geometry without flattening into a 2D billboard, "
+                    "ensure the two pillowcases (if applicable) are distinct, balanced, and uncluttered with 1-3 well-scaled legible hero motifs, "
                     "and correct cloth geometry, folds, scale, and lighting."
                 )
             if attempt < max(1, attempts) and is_transient_gemini_error(exc):
@@ -326,10 +327,10 @@ def template_pose_for_index(target: ProductTarget, index: int) -> TemplatePose:
             ),
             TemplatePose(
                 "sofa_front_showcase",
-                "a warm modern living room with a neutral three-seat sofa, photographed nearly straight on at seated eye level",
-                "the blanket is spread across the front of the sofa with a gentle drape over the seat and one lower edge, leaving sofa arms and cushions visibly identifiable",
-                "do not create a fitted chair cover, tablecloth, wall hanging, or a tiny throw",
-                "SOFA LISTING SHOT: show most of the blanket front surface with only a few broad folds; keep the artwork readable and the product large in frame.",
+                "a bright, warm, modern living room with a stylish neutral upholstered three-seat sofa, photographed at a natural eye-level perspective at a subtle 15-20 degree three-quarter angle with soft window lighting and realistic depth of field",
+                "the blanket conforms realistically to the 3D sofa contours: draped over the backrest, laying smoothly across the horizontal seat cushions showing visible cushion depth and perspective, then cascading over the front seat edge in a soft waterfall drape towards the floor with natural cloth gravity, leaving sofa armrests and cushion boundaries clearly defined",
+                "do not create a flat 2D graphic overlay, poster, banner, sticker, or rigid billboard stretched flat across the sofa without seat cushion depth; strictly no fitted slipcover, tablecloth, wall hanging, or tiny throw; no ruler-straight floating bottom hem, no garbled typography, no tilted extreme Dutch angles",
+                "SOFA LISTING SHOT: showcase the full-size blanket on the sofa with authentic 3D depth and fabric weight. The printed artwork motifs and typography remain centered, crisp, and fully readable while warping organically and subtly across the cushion curves; soft ambient shadows under the seat lip and at the bottom hem establish physical contact and realism.",
             ),
             TemplatePose(
                 "bed_full_showcase",
