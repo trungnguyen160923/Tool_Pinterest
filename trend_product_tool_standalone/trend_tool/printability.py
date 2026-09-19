@@ -479,7 +479,7 @@ def direct_ai_mockup_prompt(
         else "Rug silhouette is not applicable."
     )
     blanket_edge_rule = (
-        "For blankets: require clean, continuous straight modern sewn hems. The bottom hem hanging across the foot of the bed must form a level, continuous, straight horizontal line parallel to the floor between corners. Reject wavy scalloped edges, die-cut tabs protruding around badge/motif shapes, drooping tongues or flaps of fabric extended to complete illustrations, ruffled frills, lace trims, or comforter/duvet box quilting grids. Drape must be soft, fluid, and natural, not stiff origami/cardboard folds. Any typography from the artwork must be rendered crisply and legibly without garbled, distorted, or scrambled nonsense characters."
+        "For blankets: require clean, continuous straight modern sewn hems. The bottom hem hanging across the foot of the bed must form a level, continuous, straight horizontal line parallel to the floor between corners. Reject wavy scalloped edges, die-cut tabs protruding around badge/motif shapes, drooping tongues or flaps of fabric extended to complete illustrations, ruffled frills, lace trims, or comforter/duvet box quilting grids. Drape must be soft, fluid, and natural, not stiff origami/cardboard folds. For folded/detail shots, the blanket must be neatly folded into thick, rounded layers on furniture with authentic cloth thickness—reject mockups where the blanket is stretched flat across the sofa like an unfolded flat sheet, curtain, poster, or backdrop. Any typography from the artwork must be rendered crisply and legibly without garbled, distorted, or scrambled nonsense characters."
         if target.name == "blanket"
         else ""
     )

@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import asdict, dataclass, replace
 from datetime import datetime
+import json
 from pathlib import Path
+import re
+import shutil
 from threading import Event
 from typing import Callable
 
@@ -76,6 +80,7 @@ class CandidateReviewItem:
     reason: str
     motifs: list[str]
     source_role: str
+    candidate_index: int | None = None
 
     def to_dict(self) -> dict[str, object]:
         return asdict(self)
@@ -523,7 +528,7 @@ def run_crawl_and_review_stage(
     final_review_candidates: list[CandidateReviewItem] = []
     for idx, c in enumerate(review_candidates):
         is_rec = idx < recommended_count
-        final_review_candidates.append(replace(c, recommended=is_rec))
+        final_review_candidates.append(replace(c, recommended=is_rec, candidate_index=idx + 1))
 
     review_manifest = {
         "status": "ready_for_review",
@@ -545,6 +550,115 @@ def run_crawl_and_review_stage(
         crawl_dir=run_dir / "task5_crawl",
         config=config,
     )
+
+
+def fork_selected_candidates_to_new_run(
+    selected_items: list[Path | str | dict | CandidateReviewItem | CandidateImage],
+    source_run_dir: Path,
+    output_root: Path,
+    config: PipelineConfig,
+) -> tuple[list[CandidateReviewItem], Path]:
+    """Clones only the selected candidates into a brand-new self-contained run directory."""
+    new_run_dir = make_run_dir(output_root)
+    crawl_img_dir = new_run_dir / "task5_crawl" / "downloaded_images"
+    crawl_img_dir.mkdir(parents=True, exist_ok=True)
+
+    new_candidates: list[CandidateReviewItem] = []
+    valid_fields = {f.name for f in dataclasses.fields(CandidateReviewItem)}
+
+    for new_idx, item in enumerate(selected_items, start=1):
+        if isinstance(item, CandidateReviewItem):
+            item_dict = item.to_dict()
+        elif hasattr(item, "to_dict"):
+            item_dict = item.to_dict()
+        elif isinstance(item, dict):
+            item_dict = dict(item)
+        elif isinstance(item, CandidateImage):
+            item_dict = {
+                "image_id": item.path.stem,
+                "local_path": str(item.path),
+                "trend": item.keyword,
+                "query": item.keyword,
+                "image_score": 100.0,
+                "flat_artwork_score": 1.0,
+                "printability_score": 1.0,
+                "classification": "Flat Pattern",
+                "is_direct_printable": True,
+                "recommended": True,
+                "source_role": item.source_role or "artwork_source",
+            }
+        elif isinstance(item, (str, Path)):
+            p = Path(item)
+            item_dict = {
+                "image_id": p.stem,
+                "local_path": str(p),
+                "trend": p.stem,
+                "query": p.stem,
+                "image_score": 100.0,
+                "flat_artwork_score": 1.0,
+                "printability_score": 1.0,
+                "classification": "Flat Pattern",
+                "is_direct_printable": True,
+                "recommended": True,
+                "source_role": "artwork_source",
+            }
+        else:
+            continue
+
+        raw_src = str(item_dict.get("local_path") or "")
+        src_path = Path(raw_src) if raw_src else None
+        new_local_path = ""
+        if src_path and src_path.exists() and src_path.is_file():
+            dest_img = crawl_img_dir / src_path.name
+            shutil.copy2(src_path, dest_img)
+            new_local_path = str(dest_img.resolve())
+        else:
+            new_local_path = raw_src
+
+        clean = {k: v for k, v in item_dict.items() if k in valid_fields}
+        clean["local_path"] = new_local_path
+        clean["candidate_index"] = new_idx
+        clean["recommended"] = True
+        clean.setdefault("image_url", "")
+        clean.setdefault("pin_url", "")
+        clean.setdefault("pin_id", "")
+        clean.setdefault("trend", "")
+        clean.setdefault("query", "")
+        clean.setdefault("image_score", 100.0)
+        clean.setdefault("flat_artwork_score", 1.0)
+        clean.setdefault("printability_score", 1.0)
+        clean.setdefault("classification", "Flat Pattern")
+        clean.setdefault("is_direct_printable", True)
+        clean.setdefault("width", None)
+        clean.setdefault("height", None)
+        clean.setdefault("reason", "")
+        clean.setdefault("motifs", [])
+        clean.setdefault("source_role", "artwork_source")
+
+        new_candidates.append(CandidateReviewItem(**clean))
+
+    review_manifest = {
+        "status": "ready_for_review",
+        "run_dir": str(new_run_dir.resolve()),
+        "target_product": config.target.name,
+        "target_size": f"{config.target.width_px}x{config.target.height_px}",
+        "niche": config.trend_niche,
+        "total_candidates": len(new_candidates),
+        "direct_printable_count": sum(1 for c in new_candidates if c.is_direct_printable),
+        "candidates": [c.to_dict() for c in new_candidates],
+        "forked_from": str(source_run_dir.name),
+    }
+    write_json(new_run_dir / "candidate_review.json", review_manifest)
+
+    source_trends = source_run_dir / "task5_trends" / "trend_package.json"
+    if source_trends.exists():
+        dest_trends_dir = new_run_dir / "task5_trends"
+        dest_trends_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source_trends, dest_trends_dir / "trend_package.json")
+
+    write_json(new_run_dir / "config.json", asdict(config))
+
+    return new_candidates, new_run_dir
 
 
 def run_production_from_candidates(
@@ -575,6 +689,8 @@ def run_production_from_candidates(
             path = Path(str(getattr(item, "local_path")))
             keyword = str(getattr(item, "query", "") or getattr(item, "trend", "") or path.stem)
             meta = item.to_dict() if hasattr(item, "to_dict") else dict(getattr(item, "__dict__", {}))
+            if getattr(item, "candidate_index", None) is not None:
+                meta["candidate_index"] = getattr(item, "candidate_index")
         elif isinstance(item, CandidateImage):
             path = item.path
             keyword = item.keyword
@@ -619,6 +735,52 @@ def run_production_from_candidates(
 
     write_json(run_dir / "production_config.json", asdict(config))
 
+    # Build candidate index mapping from candidate_review.json if present
+    candidate_review_map: dict[str, int] = {}
+    candidate_review_file = run_dir / "candidate_review.json"
+    if candidate_review_file.exists():
+        try:
+            raw_cands = json.loads(candidate_review_file.read_text(encoding="utf-8"))
+            if isinstance(raw_cands, dict):
+                c_list = raw_cands.get("candidates") or []
+                for c_idx, c_obj in enumerate(c_list, start=1):
+                    if isinstance(c_obj, dict):
+                        c_num = int(c_obj.get("candidate_index") or c_idx)
+                        if c_obj.get("image_id"):
+                            candidate_review_map[str(c_obj["image_id"])] = c_num
+                        if c_obj.get("pin_id"):
+                            candidate_review_map[str(c_obj["pin_id"])] = c_num
+                        if c_obj.get("local_path"):
+                            lp = Path(str(c_obj["local_path"]))
+                            candidate_review_map[str(lp)] = c_num
+                            candidate_review_map[lp.name] = c_num
+                            candidate_review_map[lp.stem] = c_num
+        except Exception as e:
+            log(progress, f"Note: candidate_review.json parse warning: {e}")
+
+    # Build existing source -> base mapping from existing stage_manifest.json if present
+    existing_manifest_file = run_dir / "stage_manifest.json"
+    existing_manifest: dict[str, object] | None = None
+    existing_source_base_map: dict[str, str] = {}
+    if existing_manifest_file.exists():
+        try:
+            raw_manifest = json.loads(existing_manifest_file.read_text(encoding="utf-8"))
+            if isinstance(raw_manifest, dict):
+                existing_manifest = raw_manifest
+                for d_rec in existing_manifest.get("design_records", []):
+                    if isinstance(d_rec, dict):
+                        out_p = str(d_rec.get("output_path", ""))
+                        src_p = str(d_rec.get("source_path", ""))
+                        m = re.search(rf"({re.escape(config.target.name)}_\d{{3}})", out_p)
+                        if m:
+                            base_id = m.group(1)
+                            if src_p:
+                                existing_source_base_map[str(Path(src_p))] = base_id
+                                existing_source_base_map[Path(src_p).name] = base_id
+                                existing_source_base_map[Path(src_p).stem] = base_id
+        except Exception as e:
+            log(progress, f"Note: existing manifest parse warning: {e}")
+
     final_images: list[Path] = []
     final_pngs: list[Path] = []
     rendered_products: list[Path] = []
@@ -639,8 +801,24 @@ def run_production_from_candidates(
         if cancel_event is not None and cancel_event.is_set():
             raise PipelineCancelled("Production was stopped by the user.")
 
-        base = f"{config.target.name}_{index:03d}"
-        log(progress, f"[{index}/{len(resolved_sources)}] Processing design from {source_path.name}.")
+        base = None
+        cand_idx = meta.get("candidate_index")
+        if cand_idx is not None and int(cand_idx) > 0:
+            base = f"{config.target.name}_{int(cand_idx):03d}"
+        elif str(meta.get("image_id", "")) in candidate_review_map:
+            base = f"{config.target.name}_{candidate_review_map[str(meta.get('image_id'))]:03d}"
+        elif source_path.name in candidate_review_map:
+            base = f"{config.target.name}_{candidate_review_map[source_path.name]:03d}"
+        elif str(source_path) in candidate_review_map:
+            base = f"{config.target.name}_{candidate_review_map[str(source_path)]:03d}"
+        elif str(source_path) in existing_source_base_map:
+            base = existing_source_base_map[str(source_path)]
+        elif source_path.name in existing_source_base_map:
+            base = existing_source_base_map[source_path.name]
+        else:
+            base = f"{config.target.name}_{index:03d}"
+
+        log(progress, f"[{index}/{len(resolved_sources)}] Processing design {base} from {source_path.name}.")
 
         design_source = source_path
         applied_design_mode = "direct"
@@ -797,7 +975,9 @@ def run_production_from_candidates(
                         template_mockup_records.append(rec.to_dict())
                         if rec.status == "ok" and rec.mockup_path and rec.mockup_path.exists():
                             mockups.append(rec.mockup_path)
-                            lifestyle_copy = lifestyle_dir / f"{cur_target.name}_{p_idx:03d}_lifestyle_{var_idx}.png"
+                            m = re.match(rf"^({re.escape(cur_target.name)}_\d+)", print_file.name)
+                            prod_prefix = m.group(1) if m else f"{cur_target.name}_{p_idx:03d}"
+                            lifestyle_copy = lifestyle_dir / f"{prod_prefix}_lifestyle_{var_idx}.png"
                             lifestyle_copy.write_bytes(rec.mockup_path.read_bytes())
                             ai_background_final_records.append({
                                 "source_path": rec.mockup_path,
@@ -811,16 +991,88 @@ def run_production_from_candidates(
                     except Exception as mock_exc:
                         log(progress, f"Mockup view {var_idx} skipped: {mock_exc}")
 
+    # Merge newly produced records into existing stage_manifest if present
+    if existing_manifest and isinstance(existing_manifest, dict):
+        def _extract_prod_key(rec: dict | object) -> str:
+            if isinstance(rec, dict):
+                for k in ("output_path", "product_path", "asset_path", "lifestyle_path", "mockup_path", "print_path"):
+                    val = str(rec.get(k) or "")
+                    m = re.search(rf"({re.escape(config.target.name)}_\d{{3}})", val)
+                    if m:
+                        return m.group(1)
+                src = str(rec.get("source_path") or "")
+                if src:
+                    return Path(src).stem
+            return ""
+
+        def _merge_records(existing_recs: list, new_recs: list, record_id_fn=None) -> list:
+            if not existing_recs:
+                return new_recs
+            new_keys = set()
+            for r in new_recs:
+                k = record_id_fn(r) if record_id_fn else _extract_prod_key(r)
+                if k:
+                    new_keys.add(k)
+            merged = []
+            for r in existing_recs:
+                k = record_id_fn(r) if record_id_fn else _extract_prod_key(r)
+                if not k or k not in new_keys:
+                    merged.append(r)
+            merged.extend(new_recs)
+            return merged
+
+        def _lifestyle_key(rec: dict) -> str:
+            p = str(rec.get("lifestyle_path") or rec.get("mockup_path") or "")
+            return Path(p).name if p else ""
+
+        def _template_mock_key(rec: dict) -> str:
+            p = str(rec.get("mockup_path") or rec.get("output_path") or "")
+            return Path(p).name if p else ""
+
+        design_records = _merge_records(existing_manifest.get("design_records") or [], design_records)
+        enhancement_records = _merge_records(existing_manifest.get("enhancement_records") or [], enhancement_records)
+        product_render_records_dict = _merge_records(
+            existing_manifest.get("product_render_records") or [],
+            [r.to_dict() if hasattr(r, "to_dict") else dict(r) for r in product_render_records],
+        )
+        product_asset_records = _merge_records(existing_manifest.get("product_asset_records") or [], product_asset_records)
+        product_cutout_records = _merge_records(existing_manifest.get("product_cutout_records") or [], product_cutout_records)
+        artwork_generation_records = _merge_records(existing_manifest.get("artwork_generation_records") or [], artwork_generation_records)
+        rug_shape_records = _merge_records(existing_manifest.get("rug_shape_records") or [], rug_shape_records)
+        ai_background_final_records = _merge_records(
+            existing_manifest.get("ai_background_final_records") or [],
+            ai_background_final_records,
+            record_id_fn=_lifestyle_key,
+        )
+        template_mockup_records = _merge_records(
+            existing_manifest.get("template_mockup_records") or [],
+            template_mockup_records,
+            record_id_fn=_template_mock_key,
+        )
+        mockup_quality_records = _merge_records(existing_manifest.get("mockup_quality_records") or [], mockup_quality_records)
+    else:
+        product_render_records_dict = [r.to_dict() if hasattr(r, "to_dict") else dict(r) for r in product_render_records]
+
+    all_final_images = sorted(
+        [p for p in final_dir.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}],
+        key=lambda x: x.name,
+    )
+    all_mockup_images = sorted(
+        [p for p in lifestyle_dir.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}]
+        + [p for p in mockup_dir.iterdir() if p.is_file() and p.suffix.lower() in {".png", ".jpg", ".jpeg"}],
+        key=lambda x: x.name,
+    )
+
     stage_manifest = {
         "status": "completed",
         "workflow_mode": "trend_to_product",
         "design_mode": config.design_mode,
-        "selected_candidates_count": len(resolved_sources),
-        "final_images_count": len(final_images),
-        "mockups_count": len(mockups),
+        "selected_candidates_count": len(design_records),
+        "final_images_count": len(all_final_images),
+        "mockups_count": len(all_mockup_images),
         "design_records": design_records,
         "enhancement_records": enhancement_records,
-        "product_render_records": [record.to_dict() for record in product_render_records],
+        "product_render_records": product_render_records_dict,
         "product_asset_records": product_asset_records,
         "product_cutout_records": product_cutout_records,
         "artwork_generation_records": artwork_generation_records,
@@ -834,7 +1086,7 @@ def run_production_from_candidates(
         DedupeDecision(CandidateImage(path=p, source="user_review", keyword=kw), True, "selected_for_production")
         for p, kw, _ in resolved_sources
     ]
-    report_path = write_resilient_report(run_dir / "report.html", config, decisions, final_images, mockups, stage_manifest)
+    report_path = write_resilient_report(run_dir / "report.html", config, decisions, all_final_images, all_mockup_images, stage_manifest)
     log(progress, f"Production complete. Output: {run_dir}")
 
     return PipelineResult(
@@ -842,8 +1094,8 @@ def run_production_from_candidates(
         report_path=report_path,
         kept_images=[p for p, _, _ in resolved_sources],
         rejected_images=[],
-        final_images=final_images,
-        mockups=mockups,
+        final_images=all_final_images,
+        mockups=all_mockup_images,
     )
 
 

@@ -33,6 +33,7 @@ from trend_tool.comparison import build_comparison_rows
 from trend_tool.pipeline import (
     CandidateReviewItem,
     CandidateReviewPackage,
+    fork_selected_candidates_to_new_run,
     run_production_from_candidates,
 )
 from trend_tool.config import restore_pipeline_config
@@ -604,6 +605,246 @@ class TestTextilePatternAndReviewPipeline(unittest.TestCase):
                     model="dummy",
                 )
                 self.assertTrue(rug_decision.accepted)
+
+    def test_candidate_index_preservation_and_manifest_merge(self):
+        """Verify that selecting candidates 1 and 5 preserves indices blanket_001 and blanket_005,
+        and merges into existing stage_manifest.json rather than wiping existing products."""
+        tmp_dir = Path(tempfile.mkdtemp(prefix="test_preserve_idx_"))
+        try:
+            target = ProductTarget(name="blanket", width_px=300, height_px=330, dpi=100)
+            config = PipelineConfig(
+                target=target,
+                output_root=tmp_dir,
+                design_mode="direct",
+                export_cmyk=False,
+                enhancement_mode="task2_local",
+                task4_mockup_engine="off",
+            )
+
+            # Create test pattern images for candidate 1 and candidate 5
+            img1_path = tmp_dir / "cand1_img.png"
+            img5_path = tmp_dir / "cand5_img.png"
+            Image.new("RGB", (200, 220), color=(100, 150, 200)).save(img1_path)
+            Image.new("RGB", (200, 220), color=(200, 100, 150)).save(img5_path)
+
+            # Create candidate_review.json where cand1 is index 1, cand5 is index 5
+            review_manifest = {
+                "status": "ready_for_review",
+                "run_dir": str(tmp_dir),
+                "target_product": "blanket",
+                "candidates": [
+                    {"image_id": "cand_01", "local_path": str(img1_path), "candidate_index": 1},
+                    {"image_id": "cand_02", "local_path": str(tmp_dir / "dummy2.png"), "candidate_index": 2},
+                    {"image_id": "cand_03", "local_path": str(tmp_dir / "dummy3.png"), "candidate_index": 3},
+                    {"image_id": "cand_04", "local_path": str(tmp_dir / "dummy4.png"), "candidate_index": 4},
+                    {"image_id": "cand_05", "local_path": str(img5_path), "candidate_index": 5},
+                ],
+            }
+            (tmp_dir / "candidate_review.json").write_text(json.dumps(review_manifest), encoding="utf-8")
+
+            # Pre-seed stage_manifest.json with existing records for blanket_002
+            existing_manifest = {
+                "status": "completed",
+                "workflow_mode": "trend_to_product",
+                "design_mode": "direct",
+                "selected_candidates_count": 1,
+                "final_images_count": 1,
+                "mockups_count": 0,
+                "design_records": [
+                    {
+                        "source_path": str(tmp_dir / "dummy2.png"),
+                        "output_path": str(tmp_dir / "artwork_designs" / "blanket_002_design.png"),
+                        "mode": "direct",
+                    }
+                ],
+                "enhancement_records": [],
+                "product_render_records": [],
+                "product_asset_records": [],
+                "product_cutout_records": [],
+                "artwork_generation_records": [],
+                "rug_shape_records": [],
+                "ai_background_final_records": [],
+                "template_mockup_records": [],
+                "mockup_quality_records": [],
+            }
+            (tmp_dir / "stage_manifest.json").write_text(json.dumps(existing_manifest), encoding="utf-8")
+
+            # Now run production with ONLY Candidate 1 and Candidate 5
+            item1 = CandidateReviewItem(
+                image_id="cand_01",
+                local_path=str(img1_path),
+                image_url="",
+                pin_url="",
+                pin_id="",
+                trend="",
+                query="",
+                image_score=90.0,
+                flat_artwork_score=1.0,
+                printability_score=1.0,
+                classification="Flat Pattern",
+                is_direct_printable=True,
+                recommended=True,
+                width=200,
+                height=220,
+                reason="",
+                motifs=[],
+                source_role="PRIMARY",
+                candidate_index=1,
+            )
+            item5 = CandidateReviewItem(
+                image_id="cand_05",
+                local_path=str(img5_path),
+                image_url="",
+                pin_url="",
+                pin_id="",
+                trend="",
+                query="",
+                image_score=95.0,
+                flat_artwork_score=1.0,
+                printability_score=1.0,
+                classification="Flat Pattern",
+                is_direct_printable=True,
+                recommended=True,
+                width=200,
+                height=220,
+                reason="",
+                motifs=[],
+                source_role="PRIMARY",
+                candidate_index=5,
+            )
+
+            res = run_production_from_candidates(
+                selected_items=[item1, item5],
+                config=config,
+                run_dir=tmp_dir,
+            )
+
+            # Check that files on disk have blanket_001 and blanket_005 (NOT blanket_002!)
+            designs = sorted(p.name for p in (tmp_dir / "artwork_designs").glob("*.png"))
+            self.assertIn("blanket_001_design.png", designs)
+            self.assertIn("blanket_005_design.png", designs)
+            # Candidate 5 must NOT have overwritten blanket_002
+            self.assertNotIn("blanket_002_design.png", [p.name for p in (tmp_dir / "final_print").glob("*blanket_002*")])
+
+            # Check that stage_manifest.json merged blanket_002 from existing_manifest
+            # along with newly produced blanket_001 and blanket_005
+            manifest_after = json.loads((tmp_dir / "stage_manifest.json").read_text(encoding="utf-8"))
+            design_bases = [
+                Path(r["output_path"]).stem for r in manifest_after["design_records"]
+            ]
+            self.assertIn("blanket_001_design", design_bases)
+            self.assertIn("blanket_002_design", design_bases)
+            self.assertIn("blanket_005_design", design_bases)
+            self.assertEqual(len(manifest_after["design_records"]), 3)
+
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_fork_selected_candidates_to_new_run(self):
+        """Verify that fork_selected_candidates_to_new_run clones ONLY the selected candidates
+        into a new self-contained run directory, leaving the source run directory untouched."""
+        tmp_dir = Path(tempfile.mkdtemp(prefix="test_fork_"))
+        try:
+            source_run = tmp_dir / "run_source"
+            source_crawl = source_run / "task5_crawl" / "downloaded_images"
+            source_crawl.mkdir(parents=True, exist_ok=True)
+
+            img_a = source_crawl / "cand_a.png"
+            img_b = source_crawl / "cand_b.png"
+            img_c = source_crawl / "cand_c.png"
+            Image.new("RGB", (100, 100), color="red").save(img_a)
+            Image.new("RGB", (100, 100), color="green").save(img_b)
+            Image.new("RGB", (100, 100), color="blue").save(img_c)
+
+            item_a = CandidateReviewItem(
+                image_id="cand_a",
+                local_path=str(img_a),
+                image_url="",
+                pin_url="",
+                pin_id="",
+                trend="",
+                query="",
+                image_score=90.0,
+                flat_artwork_score=1.0,
+                printability_score=1.0,
+                classification="Flat Pattern",
+                is_direct_printable=True,
+                recommended=True,
+                width=100,
+                height=100,
+                reason="",
+                motifs=[],
+                source_role="PRIMARY",
+                candidate_index=1,
+            )
+            item_c = CandidateReviewItem(
+                image_id="cand_c",
+                local_path=str(img_c),
+                image_url="",
+                pin_url="",
+                pin_id="",
+                trend="",
+                query="",
+                image_score=85.0,
+                flat_artwork_score=1.0,
+                printability_score=1.0,
+                classification="Flat Pattern",
+                is_direct_printable=True,
+                recommended=False,
+                width=100,
+                height=100,
+                reason="",
+                motifs=[],
+                source_role="PRIMARY",
+                candidate_index=3,
+            )
+
+            target = ProductTarget(name="blanket", width_px=200, height_px=220, dpi=100)
+            config = PipelineConfig(
+                target=target,
+                output_root=tmp_dir,
+                design_mode="direct",
+                export_cmyk=False,
+                enhancement_mode="task2_local",
+                task4_mockup_engine="off",
+            )
+
+            # Fork ONLY items A and C to a new run
+            new_items, new_run = fork_selected_candidates_to_new_run(
+                selected_items=[item_a, item_c],
+                source_run_dir=source_run,
+                output_root=tmp_dir,
+                config=config,
+            )
+
+            self.assertTrue(new_run.exists(), "New run directory was not created")
+            self.assertNotEqual(source_run, new_run)
+
+            # Check that only A and C were copied, B was NOT copied
+            new_crawl = new_run / "task5_crawl" / "downloaded_images"
+            self.assertTrue((new_crawl / "cand_a.png").exists())
+            self.assertTrue((new_crawl / "cand_c.png").exists())
+            self.assertFalse((new_crawl / "cand_b.png").exists())
+
+            # Check new candidate_review.json
+            new_rev = json.loads((new_run / "candidate_review.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(new_rev["candidates"]), 2)
+            self.assertEqual(new_rev["forked_from"], source_run.name)
+            self.assertEqual(new_items[0].candidate_index, 1)
+            self.assertEqual(new_items[1].candidate_index, 2)
+
+            # Run production in new_run
+            res = run_production_from_candidates(new_items, config, run_dir=new_run)
+            self.assertTrue(res.report_path.exists())
+            manifest = json.loads((new_run / "stage_manifest.json").read_text(encoding="utf-8"))
+            self.assertEqual(len(manifest["design_records"]), 2)
+
+            # Check that source_run has NO final_print or artwork_designs (remained pristine)
+            self.assertFalse((source_run / "final_print").exists())
+            self.assertFalse((source_run / "artwork_designs").exists())
+
+        finally:
+            shutil.rmtree(tmp_dir, ignore_errors=True)
 
 
 if __name__ == "__main__":

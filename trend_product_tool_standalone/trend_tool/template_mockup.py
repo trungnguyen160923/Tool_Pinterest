@@ -340,10 +340,10 @@ def template_pose_for_index(target: ProductTarget, index: int) -> TemplatePose:
             ),
             TemplatePose(
                 "folded_detail_showcase",
-                "a refined living room with a neutral sofa or upholstered bench in soft window light",
-                "the blanket is folded in two or three loose layers on one end of the furniture, with one edge naturally draped to reveal thickness, weave, and a readable portion of the print",
-                "do not make it a towel, scarf, tiny decorative textile, or a stack with impossible folds",
-                "DETAIL LISTING SHOT: emphasize realistic material, edge binding and fold thickness. The full artwork need not be visible, but the product must still read as a full-size blanket.",
+                "a refined living room with a neutral sofa, armchair, or upholstered bench in soft window light",
+                "the blanket is neatly folded into two or three thick, fluffy, cozy layers resting on one end of the furniture (e.g. on the sofa armrest or seat corner), with one corner soft-draped down naturally to reveal plush fabric thickness, soft cloth folds, hem stitching, and a readable cropped portion of the print",
+                "strictly do not spread or hang the blanket flat across the sofa, do not make it an unfolded flat sheet, curtain, backdrop, or banner covering the cushions, do not make it a towel, scarf, tiny decorative textile, or a flat 2D poster; do not try to show the whole design flat",
+                "DETAIL LISTING SHOT: emphasize realistic plush fleece material, edge binding, and thick rounded cloth folds. The folds naturally crop the artwork so only a portion of the motifs and badges are visible across the folded layers, exactly like a genuine high-end ecommerce listing photograph.",
             ),
             TemplatePose(
                 "bench_throw",

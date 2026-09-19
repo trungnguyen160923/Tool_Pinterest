@@ -51,6 +51,7 @@ product_preset = config_module.product_preset
 run_pipeline = pipeline_module.run_pipeline
 run_crawl_and_review_stage = pipeline_module.run_crawl_and_review_stage
 run_production_from_candidates = pipeline_module.run_production_from_candidates
+fork_selected_candidates_to_new_run = pipeline_module.fork_selected_candidates_to_new_run
 CandidateReviewItem = pipeline_module.CandidateReviewItem
 CandidateReviewPackage = pipeline_module.CandidateReviewPackage
 PipelineCancelled = pipeline_module.PipelineCancelled
@@ -883,18 +884,26 @@ def render_candidate_review_ui(
 
     if isinstance(package_data, CandidateReviewPackage):
         run_dir = package_data.run_dir
-        candidates = package_data.candidates
+        candidates = [
+            dataclasses.replace(c, candidate_index=idx) if getattr(c, "candidate_index", None) is None else c
+            for idx, c in enumerate(package_data.candidates, start=1)
+        ]
     elif isinstance(package_data, dict):
         run_dir = Path(str(package_data.get("run_dir") or "."))
         candidates_raw = package_data.get("candidates") or []
         candidates = []
         valid_fields = {f.name for f in dataclasses.fields(CandidateReviewItem)}
-        for item in candidates_raw:
+        for idx, item in enumerate(candidates_raw, start=1):
             if isinstance(item, dict):
                 clean_item = {k: v for k, v in item.items() if k in valid_fields}
+                if clean_item.get("candidate_index") is None:
+                    clean_item["candidate_index"] = idx
                 candidates.append(CandidateReviewItem(**clean_item))
             elif isinstance(item, CandidateReviewItem):
-                candidates.append(item)
+                if getattr(item, "candidate_index", None) is None:
+                    candidates.append(dataclasses.replace(item, candidate_index=idx))
+                else:
+                    candidates.append(item)
     else:
         st.info("Không có dữ liệu hoa văn hợp lệ.")
         return
@@ -935,6 +944,14 @@ def render_candidate_review_ui(
                 index=0 if getattr(config, "design_mode", "direct") == "direct" else 1,
                 key=f"top_mode_{prefix}",
                 help="Direct Print tăng nét hoa văn gốc Pinterest. AI Artwork nhờ Gemini vẽ lại hoa văn.",
+            )
+            step2_run_target = st.radio(
+                "Đích xuất xưởng:",
+                ["new_run", "in_place"],
+                format_func=lambda x: "✨ Tạo mẻ mới (Chỉ ảnh chọn)" if x == "new_run" else f"📁 Cập nhật mẻ hiện tại ({run_dir.name})",
+                index=0,
+                key=f"top_run_target_{prefix}",
+                help="✨ Tạo mẻ mới: Tách riêng các ảnh đã chọn sang một thư mục độc lập.\n📁 Cập nhật mẻ hiện tại: Ghi trực tiếp vào thư mục mẻ này.",
             )
             top_produce_clicked = st.button(
                 f"🚀 2. Produce Selected Images ({len(selected_items)} mẫu)",
@@ -1101,6 +1118,14 @@ def render_candidate_review_ui(
     with b_col2:
         st.write("")
     with b_col1:
+        bottom_run_target = st.radio(
+            "Đích xuất xưởng:",
+            ["new_run", "in_place"],
+            format_func=lambda x: "✨ Tạo mẻ mới (Chỉ ảnh chọn)" if x == "new_run" else f"📁 Cập nhật mẻ hiện tại ({run_dir.name})",
+            index=0 if st.session_state.get(f"top_run_target_{prefix}", "new_run") == "new_run" else 1,
+            key=f"bottom_run_target_{prefix}",
+            horizontal=True,
+        )
         bottom_produce_clicked = st.button(
             f"🚀 2. Produce Selected Images ({len(selected_items)} mẫu)",
             type="primary",
@@ -1115,12 +1140,31 @@ def render_candidate_review_ui(
             if isinstance(raw_cfg, dict):
                 config = restore_pipeline_config(raw_cfg, run_dir.parent)
         if config is not None:
+            output_root = getattr(config, "output_root", None) or run_dir.parent
             config = replace(
                 config,
                 design_mode=step2_design_mode,
                 task4_ai_limit=max(len(selected_items), config.task4_ai_limit),
             )
-            active_run = start_production_run(selected_items, config, run_dir=run_dir)
+            chosen_target = (
+                st.session_state.get(f"bottom_run_target_{prefix}")
+                if bottom_produce_clicked
+                else st.session_state.get(f"top_run_target_{prefix}", "new_run")
+            )
+            if chosen_target == "new_run":
+                prod_items, target_run_dir = fork_selected_candidates_to_new_run(
+                    selected_items=selected_items,
+                    source_run_dir=run_dir,
+                    output_root=output_root,
+                    config=config,
+                )
+                st.session_state["deliverables_selected_run"] = target_run_dir.name
+                st.session_state["tab3_run_selector"] = target_run_dir.name
+            else:
+                prod_items = selected_items
+                target_run_dir = run_dir
+
+            active_run = start_production_run(prod_items, config, run_dir=target_run_dir)
             st.session_state["trend_product_active_run"] = active_run
             st.rerun()
 
