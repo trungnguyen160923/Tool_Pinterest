@@ -231,7 +231,7 @@ def generate_direct_ai_lifestyle(
 
     config = types.GenerateContentConfig(
         response_modalities=["IMAGE"],
-        temperature=0.25,
+        temperature=0.35,
         image_config=types.ImageConfig(aspect_ratio="1:1", image_size="2K", output_mime_type="image/png"),
     )
     response = client.models.generate_content(
@@ -268,7 +268,8 @@ def direct_ai_lifestyle_prompt(target: ProductTarget, pose: TemplatePose, correc
         )
         avoid = (
             "No scalloped borders, no die-cut or tabbed fabric edges, no motif-shaped hem protrusions, no drooping fabric flaps or tongues, "
-            "no ruffled edges or frills, no lace trims, no comforter/duvet box quilting stitches, no stiff origami folds, no bedspread skirt, "
+            "no flat 2D cardboard pillows, no paper placards or stickers, no ruffled edges or frills, no lace trims, "
+            "no comforter/duvet box quilting stitches, no stiff origami folds, no bedspread skirt, "
             "no chair cover, towel, scarf, placemat, rug, wall hanging, no garbled or distorted lettering, "
             "no superimposed photographer watermarks, brand logos, or UI overlays."
         )
@@ -288,13 +289,13 @@ def direct_ai_lifestyle_prompt(target: ProductTarget, pose: TemplatePose, correc
     if pose.name == "bed_full_showcase":
         coordinated_products = (
             "Coordinated Bedroom Set showcase: show the full blanket covering the bed plus exactly two matching printed pillowcases "
-            "propped neatly side-by-side at the head of the bed against the headboard. "
-            "Blanket drape & hems: The blanket drapes smoothly over the mattress and falls naturally over the foot and lower side edges with clean straight sewn hems. "
+            "propped neatly side-by-side at the head of the bed against the headboard (with plush white sleeping pillows visible behind them). "
+            "Blanket drape & hems: The blanket drapes smoothly over the mattress with gentle natural cloth waves, a neat turned-down top cuff of white bedding near the pillows, and falls naturally over the foot and lower side edges with clean straight sewn hems. "
             "The bottom hem hanging at the foot of the bed MUST FORM A LEVEL, CONTINUOUS, RULER-STRAIGHT HORIZONTAL LINE parallel to the floor between the bed's left and right corners—strictly no die-cut contouring, no scalloped tabs or tongues protruding around motifs or badges, no ruffled frills, and no comforter box quilting. Any artwork badge or motif near the edge must be cleanly sliced in half by the straight horizontal hemline. "
-            "Pillowcase styling & scale: The two pillowcases must be distinct, separate, clean, and aesthetic. "
+            "Pillowcase styling & scale: The two pillowcases must be distinct, separate, and authentic 3D bed pillows. They are visibly plump, soft, and fluffy decorative pillow shams propped at a natural, slightly reclined angle in front of white sleeping pillows against the headboard, with realistic fabric creasing, rounded contours, and sewn perimeter seams (never flat 2D cardboard cutouts, stickers, or rigid placards). "
             "Rather than repeating the entire dense pattern into tiny micro-icons, each pillowcase should feature 1 to 2 prominent, well-scaled hero motifs from the artwork "
             "(e.g. one clean decorative illustration, character, or badge per pillowcase) with clean negative space and readable typography in an uncluttered, balanced layout. "
-            "Keep any lettering crisp, readable, and elegant. Strictly avoid repetitive dense micro-pattern tiling on the pillowcases. Absolutely no crowded micro-repeats, squished icons, or garbled text on the pillows."
+            "Keep any lettering crisp, readable, and elegant. Absolutely no crowded micro-repeats, squished icons, or garbled text on the pillows."
         )
     else:
         coordinated_products = ""
@@ -332,9 +333,9 @@ def template_pose_for_index(target: ProductTarget, index: int) -> TemplatePose:
             ),
             TemplatePose(
                 "bed_full_showcase",
-                "a bright, elegant, modern bedroom with a made bed and stylish headboard, photographed from a straight-on eye-level centered perspective from the foot of the bed with soft natural window lighting and realistic depth of field",
-                "the blanket covers the entire mattress and drapes naturally over the foot and both lower side edges with continuous straight sewn hems (the bottom hem hanging at the foot is a clean straight horizontal line parallel to the floor, never scalloped, notched, or tabbed around artwork motifs); exactly two matching printed pillowcases sit propped neatly side-by-side at the head of the bed",
-                "do not leave plain white pillows, do not merge or squish pillows into cluttered blobs, no scalloped cuts or ruffled frills, no die-cut tabs following badge shapes, no comforter box quilting stitches, no stiff origami folds, no garbled typography, no tilted or extreme diagonal camera angles, no photographer watermarks",
+                "a bright, elegant, modern bedroom with a beautifully made bed and stylish upholstered headboard, photographed from a natural eye-level perspective from the foot of the bed with soft natural window lighting and realistic depth of field",
+                "the blanket covers the entire mattress with gentle natural cloth waves and a soft turned-back top cuff, draping naturally over the foot and side edges with continuous straight sewn hems (the bottom hem hanging at the foot is a clean straight horizontal line parallel to the floor, never scalloped, notched, or tabbed around artwork motifs); exactly two matching printed plump 3D pillowcases sit propped neatly in front of white sleeping pillows against the headboard",
+                "do not leave plain white pillows without printed shams, do not make flat 2D cardboard pillows or stickers, do not merge or squish pillows into cluttered blobs, no scalloped cuts or ruffled frills, no die-cut tabs following badge shapes, no comforter box quilting stitches, no stiff origami folds, no garbled typography, no tilted or extreme diagonal camera angles, no photographer watermarks",
                 "BEDROOM SET LISTING SHOT: showcase a coordinated set of one full blanket across the bed plus exactly two matching pillowcases. Pillowcases must feature clean, balanced, well-scaled motifs without clutter; blanket must have clean straight sewn hems and a realistic soft drape.",
             ),
             TemplatePose(
