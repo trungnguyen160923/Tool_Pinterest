@@ -17,12 +17,19 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal
 
-from fastapi import FastAPI, HTTPException, status
+from fastapi import FastAPI, HTTPException, Query, status
 from fastapi.responses import FileResponse, JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
 from trend_tool.config import PipelineConfig, ProductTarget, product_preset
-from trend_tool.pipeline import PipelineCancelled, PipelineResult, run_pipeline
+from trend_tool.pipeline import (
+    CandidateReviewItem,
+    PipelineCancelled,
+    PipelineResult,
+    run_crawl_and_review_stage,
+    run_pipeline,
+    run_production_from_candidates,
+)
 from trend_tool.settings import TOOL_ROOT, env, env_float, env_int, load_tool_env, task5_token_path_from_env
 
 
@@ -47,8 +54,12 @@ class CreateJobRequest(BaseModel):
     trend_type: Literal["growing", "monthly", "yearly", "seasonal"] = "growing"
     design_mode: Literal["ai-artwork", "direct", "product-design", "pattern-repeat"] = "ai-artwork"
     artwork_image_size: Literal["1K", "2K", "4K"] = "2K"
+    mockup_engine: Literal["direct_ai", "template_ai", "blender_3d"] = "direct_ai"
     ai_background_variants: int = Field(default=5, ge=1, le=5)
     remove_white_background: bool = False
+    workflow_stage: Literal["auto", "crawl_and_review", "production"] = "auto"
+    selected_candidates: list[dict[str, Any]] | None = None
+    source_run_id: str | None = None
 
     @model_validator(mode="after")
     def validate_custom_size(self) -> "CreateJobRequest":
@@ -69,9 +80,13 @@ class Job:
         self.started_at: str | None = None
         self.finished_at: str | None = None
         self.status = "queued"
-        self.logs: list[str] = []
+        self.logs: list[str] = [
+            f"Khởi tạo Job {self.id}: niche='{request.niche}', product='{request.product}', stage='{request.workflow_stage}'"
+        ]
         self.error: str | None = None
         self.result: PipelineResult | None = None
+        self.review_package: Any | None = None
+        self.run_dir: Path | None = None
         self.cancel_event = threading.Event()
         self.lock = threading.Lock()
 
@@ -136,7 +151,7 @@ def build_config(request: CreateJobRequest) -> PipelineConfig:
         design_mode=request.design_mode.replace("-", "_"),
         artwork_image_size=request.artwork_image_size,
         enhancement_mode="task2_local",
-        task4_mockup_engine="direct_ai",
+        task4_mockup_engine=request.mockup_engine,
         task4_ai_limit=request.desired_output_count,
         task4_variants_per_product=request.ai_background_variants,
         # Local placeholder mockups are not API deliverables.
@@ -152,11 +167,36 @@ def run_job(job: Job) -> None:
     def progress(message: str) -> None:
         with job.lock:
             job.logs.append(message)
-            # Retain enough context for debugging without allowing an unbounded API response.
             del job.logs[:-500]
 
     try:
-        result = run_pipeline(build_config(job.request), progress=progress, cancel_event=job.cancel_event)
+        cfg = build_config(job.request)
+        if job.request.workflow_stage == "crawl_and_review":
+            review_pkg = run_crawl_and_review_stage(cfg, progress=progress, cancel_event=job.cancel_event)
+            with job.lock:
+                job.status = "ready_for_review"
+                job.review_package = review_pkg
+                job.run_dir = review_pkg.run_dir
+        elif job.request.workflow_stage == "production":
+            selected = job.request.selected_candidates or []
+            src_dir = (OUTPUT_ROOT / job.request.source_run_id).resolve() if job.request.source_run_id else None
+            prod_result = run_production_from_candidates(
+                selected,
+                cfg,
+                run_dir=src_dir,
+                progress=progress,
+                cancel_event=job.cancel_event,
+            )
+            with job.lock:
+                job.status = "completed"
+                job.result = prod_result
+                job.run_dir = prod_result.run_dir
+        else:
+            result = run_pipeline(cfg, progress=progress, cancel_event=job.cancel_event)
+            with job.lock:
+                job.status = "completed"
+                job.result = result
+                job.run_dir = result.run_dir
     except PipelineCancelled as exc:
         with job.lock:
             job.status = "cancelled"
@@ -165,10 +205,6 @@ def run_job(job: Job) -> None:
         with job.lock:
             job.status = "failed"
             job.error = str(exc)
-    else:
-        with job.lock:
-            job.status = "completed"
-            job.result = result
     finally:
         with job.lock:
             job.finished_at = now()
@@ -217,8 +253,6 @@ def marketing_image_paths(result: PipelineResult) -> list[Path]:
         return []
 
     paths: list[Path] = []
-    # Direct/template AI records use mockup_path. Task4 background replacement
-    # writes a stable lifestyle_path for the accepted final background.
     for record_key, path_key in (
         ("template_mockup_records", "mockup_path"),
         ("ai_background_final_records", "lifestyle_path"),
@@ -261,6 +295,26 @@ def job_payload(job: Job) -> dict[str, Any]:
             "cancel_url": f"/v1/jobs/{job.id}",
         }
         result = job.result
+        review_pkg = job.review_package
+        current_run_dir = job.run_dir
+
+    if review_pkg is not None and current_run_dir is not None:
+        cand_list = []
+        for c in review_pkg.candidates:
+            c_dict = c.to_dict() if hasattr(c, "to_dict") else dict(c)
+            lp = c_dict.get("local_path")
+            if lp:
+                try:
+                    rel = Path(lp).resolve().relative_to(current_run_dir.resolve()).as_posix()
+                    c_dict["download_url"] = f"/v1/jobs/{job.id}/files/{rel}"
+                except Exception:
+                    pass
+            cand_list.append(c_dict)
+        payload["run_id"] = current_run_dir.name
+        payload["candidates"] = cand_list
+        payload["total_candidates"] = len(cand_list)
+        payload["direct_printable_count"] = sum(1 for c in cand_list if c.get("is_direct_printable"))
+
     if result is None:
         return payload
 
@@ -269,10 +323,25 @@ def job_payload(job: Job) -> dict[str, Any]:
     cmyk_print_files = [asset(path, run_dir, "print_cmyk") for path in cmyk_print_paths(result)]
     for item in [*marketing_images, *cmyk_print_files]:
         item["download_url"] = item["download_url"].format(job_id=job.id)
+
+    rug_shape_records = []
+    detected_shape = "rectangle"
+    manifest_path = run_dir / "stage_manifest.json"
+    if manifest_path.is_file():
+        try:
+            m_data = json.loads(manifest_path.read_text(encoding="utf-8"))
+            rug_shape_records = m_data.get("rug_shape_records") or []
+            if rug_shape_records and isinstance(rug_shape_records[0], dict):
+                detected_shape = rug_shape_records[0].get("shape") or "rectangle"
+        except Exception:
+            pass
+
     payload["output"] = {
         "run_id": run_dir.name,
         "marketing_images": marketing_images,
         "print_cmyk_images": cmyk_print_files,
+        "rug_shape": detected_shape,
+        "rug_shape_records": rug_shape_records,
         "summary": {
             "marketing_images": len(marketing_images),
             "print_cmyk_images": len(cmyk_print_files),
@@ -287,16 +356,16 @@ def health() -> dict[str, str]:
 
 
 @app.post("/v1/jobs")
-def create_job(request: CreateJobRequest) -> JSONResponse:
+def create_job(request: CreateJobRequest, wait: bool = Query(default=False)) -> JSONResponse:
     job = Job(request)
     with jobs_lock:
         jobs[job.id] = job
     worker = threading.Thread(target=run_job, args=(job,), name=f"trend-product-{job.id[:8]}", daemon=True)
     worker.start()
-    # The client connection stays open (and its UI shows loading) until the
-    # complete deliverable set is available in the response.
-    worker.join()
-    return JSONResponse(status_code=status.HTTP_200_OK, content=job_payload(job))
+    if wait:
+        worker.join()
+        return JSONResponse(status_code=status.HTTP_200_OK, content=job_payload(job))
+    return JSONResponse(status_code=status.HTTP_202_ACCEPTED, content=job_payload(job))
 
 
 @app.get("/v1/jobs/{job_id}")
@@ -321,13 +390,14 @@ def download_file(job_id: str, relative_path: str) -> FileResponse:
     job = get_job_or_404(job_id)
     with job.lock:
         result = job.result
-    if result is None:
-        raise HTTPException(status_code=409, detail="Files are available only after a completed job")
-    run_dir = result.run_dir.resolve()
+        run_dir = (result.run_dir if result else job.run_dir)
+    if run_dir is None:
+        raise HTTPException(status_code=409, detail="Files are available only after a run directory is initialized")
+    run_dir = run_dir.resolve()
     candidate = (run_dir / relative_path).resolve()
     if candidate != run_dir and run_dir not in candidate.parents:
         raise HTTPException(status_code=400, detail="Invalid file path")
-    if candidate not in deliverable_paths(result):
+    if not candidate.is_file():
         raise HTTPException(status_code=404, detail="File not found")
     media_type = mimetypes.guess_type(candidate.name)[0] or "application/octet-stream"
     return FileResponse(candidate, media_type=media_type, filename=candidate.name)
@@ -337,3 +407,4 @@ if __name__ == "__main__":
     import uvicorn
 
     uvicorn.run("api:app", host=os.getenv("TREND_PRODUCT_API_HOST", "127.0.0.1"), port=int(os.getenv("TREND_PRODUCT_API_PORT", "8000")), reload=False)
+

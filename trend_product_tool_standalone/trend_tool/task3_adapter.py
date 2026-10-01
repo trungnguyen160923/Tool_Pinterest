@@ -36,14 +36,32 @@ def run_task3_replacements(artworks: list[Path], config: Task3ReplacementConfig 
     return [run_one_task3_replacement(artwork, config) for artwork in selected]
 
 
-def run_one_task3_replacement(artwork: Path, config: Task3ReplacementConfig) -> Task3ReplacementResult:
-    repo_root = Path(__file__).resolve().parents[2]
-    script = repo_root / "task3_image_replace" / "benchmark_rug_artwork_replacement.py"
-    if not script.exists():
-        raise RuntimeError(f"task3 replacement script not found: {script}")
+def find_task3_script() -> Path | None:
+    tool_root = Path(__file__).resolve().parents[1]
+    candidates = [
+        tool_root / "task3_image_replace" / "benchmark_rug_artwork_replacement.py",
+        tool_root.parent / "task3_image_replace" / "benchmark_rug_artwork_replacement.py",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
 
+
+def run_one_task3_replacement(artwork: Path, config: Task3ReplacementConfig) -> Task3ReplacementResult:
     stage_root = config.output_dir / artwork.stem
     stage_root.mkdir(parents=True, exist_ok=True)
+    log_path = stage_root / "task3_replacement.log"
+
+    script = find_task3_script()
+    if script is None or not script.exists():
+        message = (
+            "Legacy task3 replacement script not found (task3_image_replace/benchmark_rug_artwork_replacement.py). "
+            "Skipping legacy task3 replacement."
+        )
+        log_path.write_text(f"{message}\n", encoding="utf-8")
+        return Task3ReplacementResult(artwork, None, [], log_path, "failed", message)
+
     before = existing_dirs(stage_root)
     command = [
         sys.executable,
@@ -65,14 +83,14 @@ def run_one_task3_replacement(artwork: Path, config: Task3ReplacementConfig) -> 
         "--format",
         "png",
     ]
-    completed = subprocess.run(command, cwd=repo_root, text=True, capture_output=True, input="y\n")
-    log_path = stage_root / "task3_replacement.log"
+    completed = subprocess.run(command, cwd=script.parent.parent, text=True, capture_output=True, input="y\n")
     write_process_log(log_path, command, completed)
     run_dir = newest_new_dir(stage_root, before)
     outputs = sorted((run_dir / "outputs").glob("*.*")) if run_dir and (run_dir / "outputs").exists() else []
     status = "ok" if completed.returncode == 0 and outputs else "failed"
     notes = "AI artwork replacement completed." if status == "ok" else tail_text(completed.stderr) or tail_text(completed.stdout)
     return Task3ReplacementResult(artwork, run_dir, outputs, log_path, status, notes)
+
 
 
 def existing_dirs(path: Path) -> set[Path]:

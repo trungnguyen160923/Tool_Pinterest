@@ -1,4 +1,4 @@
-# Secrets
+# Secrets and credentials
 .env
 .env.*
 !.env.example
@@ -8,6 +8,10 @@
 *.credentials.json
 *.tokens.json
 .pinterest_oauth_tokens.json
+trend_product_tool_standalone/.env
+trend_product_tool_standalone/.pinterest_oauth_tokens.json
+trend_product_tool_standalone/pinterest/.pinterest_oauth_tokens.json
+trend_product_tool_standalone/pinterest/.pinterest_browser_profile/
 
 # Python
 __pycache__/
@@ -25,35 +29,18 @@ venv/
 env/
 ENV/
 
-# Generated outputs and reports
-runs*/
+# Output directories & artifacts
 output/
 outputs/
-index/
+runs*/
 tmp/
 *.tmp
 *.log
-*_trend_output/
-*_crawl_output/
-trend_output/
-crawl_output/
-blanket_trend_output/
-blanket_crawl_output/
-.tmp*/
+trend_product_tool_standalone/output/
 
-# Task-specific generated folders
-task2_image_benchmark/runs*/
-task2_image_benchmark/tmp/
-task3_image_replace/runs_task3*/
-task4_background_replace/runs_task4*/
-task5_hottrend/*_trend_output/
-task5_hottrend/*_crawl_output/
-task5_hottrend/.pinterest_browser_profile/
-task5_hottrend/.hallmark/
-task6_image_similarity/index/
-task6_image_similarity/output/
-
-# Local caches and large model files
+# Third party binaries & large models
+third_party/
+trend_product_tool_standalone/third_party/
 .cache/
 models/
 *.safetensors
@@ -61,13 +48,14 @@ models/
 *.pt
 *.pth
 *.onnx
-third_party/
 
-# OS/editor
+# Browser automation & testing artifacts
+.playwright-mcp/
+trend_product_tool_standalone/.playwright-mcp/
+
+# OS / Editor
 .DS_Store
 Thumbs.db
 desktop.ini
 .idea/
 .vscode/
-
-.playwright-mcp/

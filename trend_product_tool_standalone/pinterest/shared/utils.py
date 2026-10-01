@@ -31,6 +31,9 @@ def configure_logging(verbose: bool) -> None:
 
 
 def project_root() -> Path:
+    tool_root = Path(__file__).resolve().parents[2]
+    if (tool_root / "trend_tool").exists() or (tool_root / ".env").exists() or (tool_root / "pinterest").exists():
+        return tool_root
     return Path(__file__).resolve().parents[1]
 
 
@@ -54,7 +57,9 @@ def load_dotenv(paths: Iterable[Path]) -> None:
 
 load_dotenv(
     [
+        Path(__file__).resolve().parents[2] / ".env",
         project_root() / ".env",
+        Path(__file__).resolve().parents[1] / ".env",
     ]
 )
 

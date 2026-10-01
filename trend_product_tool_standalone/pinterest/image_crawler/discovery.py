@@ -229,30 +229,65 @@ class PinterestBrowserProvider(DiscoveryProvider):
         self._context = None
         atexit.register(self.close)
 
+    def _cleanup_stale_profile_locks(self) -> None:
+        try:
+            for name in ("SingletonLock", "SingletonCookie", "SingletonSocket"):
+                lock_file = self.user_data_dir / name
+                if lock_file.exists():
+                    try:
+                        lock_file.unlink(missing_ok=True)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+        if os.name == "nt":
+            try:
+                import subprocess
+                target_dir = str(self.user_data_dir).replace("'", "''")
+                ps_cmd = (
+                    f"Get-CimInstance Win32_Process -Filter \"Name='chrome.exe'\" | "
+                    f"Where-Object {{ $_.CommandLine -like '*{target_dir}*' }} | "
+                    f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}"
+                )
+                subprocess.run(["powershell", "-NoProfile", "-Command", ps_cmd], capture_output=True, timeout=5)
+            except Exception:
+                pass
+
     def _ensure_context(self):
         if self._context is not None:
             return self._context
         from playwright.sync_api import sync_playwright
 
-        self._playwright = sync_playwright().start()
         self.user_data_dir.mkdir(parents=True, exist_ok=True)
-        self._context = self._playwright.chromium.launch_persistent_context(
-            user_data_dir=str(self.user_data_dir),
-            headless=self.headless,
-            viewport={"width": 1366, "height": 900},
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/126.0.0.0 Safari/537.36"
-            ),
-            locale=env("PINTEREST_LOCALE", "en-US"),
-            args=[
-                "--disable-blink-features=AutomationControlled",
-                "--disable-dev-shm-usage",
-                "--disable-quic",
-                "--disable-http3",
-            ],
-        )
+        for attempt in range(2):
+            try:
+                if self._playwright is None:
+                    self._playwright = sync_playwright().start()
+                self._context = self._playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(self.user_data_dir),
+                    headless=self.headless,
+                    viewport={"width": 1366, "height": 900},
+                    user_agent=(
+                        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/126.0.0.0 Safari/537.36"
+                    ),
+                    locale=env("PINTEREST_LOCALE", "en-US"),
+                    args=[
+                        "--disable-blink-features=AutomationControlled",
+                        "--disable-dev-shm-usage",
+                        "--disable-quic",
+                        "--disable-http3",
+                    ],
+                )
+                return self._context
+            except Exception as exc:
+                LOG.warning("Failed to launch Pinterest browser context (attempt %d/2): %s", attempt + 1, exc)
+                self.close()
+                if attempt == 0:
+                    self._cleanup_stale_profile_locks()
+                else:
+                    raise
         return self._context
 
     def close(self) -> None:
@@ -275,8 +310,12 @@ class PinterestBrowserProvider(DiscoveryProvider):
         region: str,
         locale: str,
     ) -> list[SearchResult]:
-        context = self._ensure_context()
-        page = context.new_page()
+        try:
+            context = self._ensure_context()
+            page = context.new_page()
+        except Exception:
+            self.close()
+            raise
         page.set_default_timeout(max(10_000, self.timeout * 1000))
         try:
             url = f"https://www.pinterest.com/search/pins/?q={quote_plus(query)}"

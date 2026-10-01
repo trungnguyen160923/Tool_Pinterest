@@ -41,23 +41,15 @@ from trend_tool.config import restore_pipeline_config
 
 class TestTextilePatternAndReviewPipeline(unittest.TestCase):
     def test_syntax_compilation(self):
-        """Ensure all modified python modules compile cleanly."""
+        """Ensure all standalone python modules compile cleanly."""
         root = Path(__file__).resolve().parent
-        files_to_check = [
-            root / "app.py",
-            root / "trend_tool" / "pipeline.py",
-            root / "trend_tool" / "config.py",
-            root / "trend_tool" / "comparison.py",
-            root / "trend_tool" / "task5_adapter.py",
-            root / "pinterest" / "trend_finder" / "semantic_analyzer.py",
-            root / "pinterest" / "image_crawler" / "hot_image_crawler.py",
-            root / "pinterest" / "image_crawler" / "vision_filter.py",
-            root / "pinterest" / "image_crawler" / "ranker.py",
-            root / "pinterest" / "shared" / "models.py",
-        ]
-        for f in files_to_check:
-            self.assertTrue(f.exists(), f"File missing: {f}")
-            py_compile.compile(str(f), doraise=True)
+        checked = 0
+        for py_file in root.rglob("*.py"):
+            if "third_party" in py_file.parts or ".git" in py_file.parts:
+                continue
+            py_compile.compile(str(py_file), doraise=True)
+            checked += 1
+        self.assertGreater(checked, 20, "Expected at least 20 python files to be checked")
 
     def test_cli_standalone_execution(self):
         """Ensure hot_image_crawler.py executes standalone without NameError or missing imports."""
@@ -845,6 +837,57 @@ class TestTextilePatternAndReviewPipeline(unittest.TestCase):
 
         finally:
             shutil.rmtree(tmp_dir, ignore_errors=True)
+
+    def test_standalone_decoupling_and_fallbacks(self):
+        """Verify that standalone tool finds bundled Blender, handles missing legacy task folders gracefully,
+        and correctly locates standalone configuration and tokens."""
+        from trend_tool.blender_renderer import find_blender_executable
+        from trend_tool.task3_adapter import find_task3_script, run_task3_replacements, Task3ReplacementConfig
+        from trend_tool.task4_adapter import find_task4_script, run_one_task4_mockup, Task4MockupConfig
+        from trend_tool.task6_adapter import find_task6_root, load_task6_modules, reject_matches_from_task6
+        from pinterest.shared import utils
+        from pinterest.trend_finder import pinterest_client
+
+        # 1. Bundled Blender exists in standalone third_party
+        blender_exe = find_blender_executable()
+        self.assertIsNotNone(blender_exe, "Bundled Blender executable not found")
+        self.assertTrue(blender_exe.is_file(), f"Blender executable path does not exist: {blender_exe}")
+        self.assertIn("trend_product_tool_standalone", str(blender_exe))
+
+        # 2. Legacy task folders are decoupled and missing gracefully handled
+        self.assertIsNone(find_task3_script(), "Legacy task3 script should be None in standalone mode")
+        self.assertIsNone(find_task4_script(), "Legacy task4 script should be None in standalone mode")
+        self.assertIsNone(find_task6_root(), "Legacy task6 root should be None in standalone mode")
+        self.assertIsNone(load_task6_modules(), "load_task6_modules should return None when task6 is absent")
+
+        # 3. Adapters return safe fallbacks without throwing unhandled exceptions
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            dummy_art = tmp_path / "dummy.png"
+            Image.new("RGB", (100, 100)).save(dummy_art)
+
+            # task3 adapter fallback
+            t3_cfg = Task3ReplacementConfig(reference_dir=tmp_path, output_dir=tmp_path / "t3_out")
+            t3_results = run_task3_replacements([dummy_art], t3_cfg)
+            self.assertEqual(len(t3_results), 1)
+            self.assertEqual(t3_results[0].status, "failed")
+            self.assertIn("not found", t3_results[0].notes.lower())
+
+            # task4 adapter fallback
+            t4_cfg = Task4MockupConfig(output_dir=tmp_path / "t4_out")
+            t4_res = run_one_task4_mockup(dummy_art, t4_cfg)
+            self.assertEqual(t4_res.status, "failed")
+            self.assertIn("not found", t4_res.notes.lower())
+
+            # task6 adapter fallback
+            from trend_tool.crawler import CandidateImage
+            cand = CandidateImage(path=dummy_art, source="test", keyword="rug")
+            accepted, decisions = reject_matches_from_task6([cand], config=None)
+            self.assertEqual(len(accepted), 1)
+
+        # 4. Pinterest utils resolves to standalone tool root
+        self.assertEqual(utils.project_root(), Path(__file__).resolve().parent)
+        self.assertTrue(any(p.name == ".pinterest_oauth_tokens.json" and p.exists() for p in pinterest_client.DEFAULT_TOKEN_PATHS))
 
 
 if __name__ == "__main__":

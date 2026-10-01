@@ -10,7 +10,7 @@ from .config import ProductTarget
 from .product_asset import create_gemini_client, extract_response_text, image_part, parse_json_relaxed
 
 
-AUTO_RENDERABLE_SHAPES = {"rectangle", "square", "round", "oval", "runner"}
+AUTO_RENDERABLE_SHAPES = {"rectangle", "square", "round", "oval", "runner", "arch", "organic", "custom_cutline"}
 
 
 @dataclass(frozen=True)
@@ -39,7 +39,7 @@ def recommend_rug_shape(
             artwork = ImageOps.exif_transpose(opened).convert("RGB")
         assessment = _assess(artwork, backend=backend, model=model)
         recommended = str(assessment.get("recommended_shape") or "rectangle").strip().lower()
-        custom = recommended == "custom_cutline" or bool(assessment.get("custom_cutline_recommended"))
+        custom = recommended in {"custom_cutline", "organic"} or bool(assessment.get("custom_cutline_recommended"))
         shape = recommended if recommended in AUTO_RENDERABLE_SHAPES else "rectangle"
         alternatives = tuple(
             value for value in (str(item).strip().lower() for item in assessment.get("alternatives", []))
@@ -47,7 +47,7 @@ def recommend_rug_shape(
         )
         confidence = max(0.0, min(100.0, float(assessment.get("confidence") or 0)))
         reason = str(assessment.get("reason") or "AI selected the safest standard rug silhouette.")
-        if custom:
+        if custom and shape not in {"organic", "custom_cutline"}:
             reason += " Custom cutline was suggested but requires a vendor-ready contour, so rectangle is used automatically."
         return RugShapeDecision(shape, confidence, reason, alternatives, custom)
     except Exception as exc:
@@ -63,9 +63,8 @@ def _assess(artwork: Image.Image, *, backend: str, model: str) -> dict[str, Any]
         contents=[
             image_part(artwork),
             """Analyze this flat rug artwork's composition for the most commercially suitable physical rug silhouette.
-Choose one recommended_shape: rectangle, square, round, oval, runner, or custom_cutline.
-Use round for radial/central motifs; square for balanced all-over or central compositions; oval for soft horizontal/organic compositions; runner for strongly vertical artwork; rectangle for ordinary directional or full-bleed designs.
-Only recommend custom_cutline for a clearly isolated silhouette; it will not be auto-produced without a real manufacturing contour.
+Choose one recommended_shape: rectangle, square, round, oval, runner, arch, or organic (custom_cutline).
+Use round for radial/central motifs; square for balanced all-over or central compositions; oval for soft horizontal compositions; runner for strongly vertical artwork; arch for arched top/doorway compositions; organic for irregular/freeform curved compositions; rectangle for ordinary directional or full-bleed designs.
 Return JSON only:
 {
   "recommended_shape": "rectangle",

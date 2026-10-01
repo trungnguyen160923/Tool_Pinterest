@@ -95,9 +95,19 @@ def find_blender_executable() -> Path | None:
     configured = os.environ.get("BLENDER_EXECUTABLE", "").strip()
     if configured and Path(configured).is_file():
         return Path(configured)
-    repo_root = Path(__file__).resolve().parents[2]
-    bundled = repo_root / "third_party" / "blender-5.2.1" / "blender-5.2.1-windows-x64" / "blender.exe"
-    return bundled if bundled.is_file() else None
+    tool_root = Path(__file__).resolve().parents[1]
+    candidates = [
+        tool_root / "third_party" / "blender-5.2.1" / "blender-5.2.1-windows-x64" / "blender.exe",
+        tool_root / "third_party" / "blender-5.2.1" / "blender.exe",
+        tool_root / "third_party" / "blender" / "blender.exe",
+        tool_root.parent / "third_party" / "blender-5.2.1" / "blender-5.2.1-windows-x64" / "blender.exe",
+        tool_root.parent / "third_party" / "blender-5.2.1" / "blender.exe",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
 
 
 def write_texture_preview(source: Path, destination: Path, max_side: int = 2048) -> None:

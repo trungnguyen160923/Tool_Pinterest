@@ -5,3 +5,7 @@ pinterest/.pinterest_browser_profile/
 output/
 __pycache__/
 *.py[cod]
+third_party/
+.playwright-mcp/
+*.log
+.cache/

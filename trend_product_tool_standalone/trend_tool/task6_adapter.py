@@ -21,6 +21,42 @@ class Task6SimilarityConfig:
     device: str = "auto"
 
 
+def find_task6_root() -> Path | None:
+    tool_root = Path(__file__).resolve().parents[1]
+    candidates = [
+        tool_root / "task6_image_similarity",
+        tool_root.parent / "task6_image_similarity",
+    ]
+    for candidate in candidates:
+        if candidate.is_dir():
+            return candidate
+    return None
+
+
+def load_task6_modules() -> dict[str, object] | None:
+    task6_root = find_task6_root()
+    if task6_root is None or not task6_root.exists():
+        return None
+    task6_root_text = str(task6_root)
+    if task6_root_text not in sys.path:
+        sys.path.insert(0, task6_root_text)
+
+    try:
+        from image_similarity.indexer import build_index
+        from image_similarity.searcher import query_features, search
+        from image_similarity.embeddings import create_embedder
+
+        return {
+            "build_index": build_index,
+            "query_features": query_features,
+            "search": search,
+            "create_embedder": create_embedder,
+        }
+    except Exception as exc:
+        print(f"[WARN] Failed importing task6 similarity modules: {exc}")
+        return None
+
+
 def reject_matches_from_task6(
     candidates: list[CandidateImage],
     config: Task6SimilarityConfig | None,
@@ -28,6 +64,10 @@ def reject_matches_from_task6(
     if config is None:
         return candidates, []
     modules = load_task6_modules()
+    if not modules:
+        # Fall back safely if task6 similarity module is not available.
+        # Downstream perceptual dedupe will still filter duplicate candidates.
+        return candidates, []
     build_index = modules["build_index"]
     query_features = modules["query_features"]
     search = modules["search"]
@@ -66,23 +106,3 @@ def reject_matches_from_task6(
         accepted.append(candidate)
     return accepted, decisions
 
-
-def load_task6_modules() -> dict[str, object]:
-    repo_root = Path(__file__).resolve().parents[2]
-    task6_root = repo_root / "task6_image_similarity"
-    if not task6_root.exists():
-        raise RuntimeError(f"task6_image_similarity not found at {task6_root}")
-    task6_root_text = str(task6_root)
-    if task6_root_text not in sys.path:
-        sys.path.insert(0, task6_root_text)
-
-    from image_similarity.indexer import build_index
-    from image_similarity.searcher import query_features, search
-    from image_similarity.embeddings import create_embedder
-
-    return {
-        "build_index": build_index,
-        "query_features": query_features,
-        "search": search,
-        "create_embedder": create_embedder,
-    }

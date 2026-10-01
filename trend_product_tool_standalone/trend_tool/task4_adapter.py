@@ -46,19 +46,39 @@ def run_task4_mockups(
     return [run_one_task4_mockup(product, config, progress, masks.get(product)) for product in selected]
 
 
+def find_task4_script() -> Path | None:
+    tool_root = Path(__file__).resolve().parents[1]
+    candidates = [
+        tool_root / "task4_background_replace" / "benchmark_product_background_replace_semantic_v4_1_best_practice.py",
+        tool_root.parent / "task4_background_replace" / "benchmark_product_background_replace_semantic_v4_1_best_practice.py",
+    ]
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
 def run_one_task4_mockup(
     product: Path,
     config: Task4MockupConfig,
     progress: ProgressLogger | None = None,
     mask_file: Path | None = None,
 ) -> Task4MockupResult:
-    repo_root = Path(__file__).resolve().parents[2]
-    script = repo_root / "task4_background_replace" / "benchmark_product_background_replace_semantic_v4_1_best_practice.py"
-    if not script.exists():
-        raise RuntimeError(f"task4 background replacement script not found: {script}")
-
     stage_root = config.output_dir / product.stem
     stage_root.mkdir(parents=True, exist_ok=True)
+    log_path = stage_root / "task4_mockup.log"
+
+    script = find_task4_script()
+    if script is None or not script.exists():
+        message = (
+            "Legacy task4 background replacement script not found. "
+            "Please use 'direct_ai', 'template_ai', or 'blender_3d' mockup engine instead."
+        )
+        if progress:
+            progress(f"AI background: {message}")
+        log_path.write_text(f"{message}\n", encoding="utf-8")
+        return Task4MockupResult(product, None, [], log_path, "failed", message)
+
     before = existing_dirs(stage_root)
     command = [
         sys.executable,
@@ -86,8 +106,7 @@ def run_one_task4_mockup(
     if mask_file is not None:
         command.extend(["--mask-file", str(mask_file)])
 
-    log_path = stage_root / "task4_mockup.log"
-    completed = run_process(command, repo_root, log_path, progress)
+    completed = run_process(command, script.parent.parent, log_path, progress)
     run_dir = newest_new_dir(stage_root, before)
     outputs = sorted(run_dir.rglob("*final*.png")) if run_dir else []
     if not outputs and run_dir:
@@ -95,6 +114,7 @@ def run_one_task4_mockup(
     status = "ok" if completed.returncode == 0 and outputs else "failed"
     notes = "AI background replacement completed." if status == "ok" else tail_text(completed.stderr) or tail_text(completed.stdout)
     return Task4MockupResult(product, run_dir, outputs, log_path, status, notes)
+
 
 
 def run_process(

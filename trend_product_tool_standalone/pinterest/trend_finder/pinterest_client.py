@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import base64
 import time
@@ -16,6 +16,7 @@ from ..shared import utils
 
 DEFAULT_TOKEN_PATHS = [
     utils.project_root() / ".pinterest_oauth_tokens.json",
+    utils.project_root() / "pinterest" / ".pinterest_oauth_tokens.json",
 ]
 
 
